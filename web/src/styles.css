@@ -138,7 +138,7 @@ select:hover { border-color: var(--muted); }
 .cat-group:not(:first-child) { border-top: 1px solid var(--line); }
 .cat { position: relative; border-bottom: 1px solid var(--line); }
 .cat-toggle {
-  display: grid; grid-template-columns: 10px 1fr; gap: 9px; align-items: center;
+  display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 9px; align-items: center;
   width: 100%; padding: 6px 12px 6px 14px; background: none; border: 0; cursor: pointer; text-align: left;
   font-size: 13px;
 }
@@ -169,6 +169,17 @@ select:hover { border-color: var(--muted); }
 .legend-ramp span:first-child { border-radius: var(--radius) 0 0 var(--radius); }
 .legend-ramp span:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
 .legend-labels { display: grid; grid-template-columns: repeat(6, 1fr); font-size: 11px; color: var(--muted); margin: 4px 0 8px; }
+
+/* Notice over the map when the selection has nothing to draw */
+.map-notice {
+  position: absolute; top: 42%; left: calc(var(--controls) + 24px + (100% - var(--controls) - 24px) / 2);
+  transform: translate(-50%, -50%); z-index: 2; width: min(380px, calc(100% - var(--controls) - 60px));
+  padding: 14px 16px; font-size: 13px;
+}
+.map-notice[hidden] { display: none; }
+.map-notice strong { display: block; font-size: 14px; margin-bottom: 4px; }
+.map-notice p { color: var(--muted); }
+.cat-toggle .mark { color: var(--muted); margin-left: -5px; }
 
 /* Theme switch, bottom left: a pill with a swatch per map style */
 .theme-switch {

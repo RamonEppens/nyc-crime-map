@@ -1,7 +1,7 @@
 // Entry point: state, queries and wiring between filters, map and summary panel.
 import './styles.css';
 import { initDb, query, loadJson } from './db.js';
-import { createMap, setTheme, setHexagons } from './map.js';
+import { createMap, setTheme, setHexagons, setUniverse, hexStats } from './map.js';
 import { GROUP_COLORS, GROUP_LABELS } from './colors.js';
 import { fmt, fmtCompact, fmtChange } from './format.js';
 import {
@@ -15,6 +15,7 @@ const YEARS = Array.from({ length: LAST_YEAR - FIRST_YEAR + 1 }, (_, i) => FIRST
 const state = {
   period: defaultPeriod(),
   cats: null,                                   // Set of selected category codes (all by default)
+  notMapped: new Set(),                         // categories NYPD publishes without a location
   showAllBars: false,
 };
 let meta;
@@ -147,8 +148,9 @@ function renderCategories() {
       cell.className = 'cat';
       if (i % 2 === 0) cell.style.borderRight = '1px solid var(--line)';
       const on = state.cats.has(c.code);
-      cell.innerHTML = `<button class="cat-toggle" data-code="${c.code}" aria-pressed="${on}" title="${c.label}">
-          <span class="dot" style="background:${GROUP_COLORS[g]}"></span><span class="name">${c.label}</span></button>
+      const tip = state.notMapped.has(c.code) ? `${c.label}: location withheld by NYPD, counted in totals but not drawn` : c.label;
+      cell.innerHTML = `<button class="cat-toggle" data-code="${c.code}" aria-pressed="${on}" title="${tip}">
+          <span class="dot" style="background:${GROUP_COLORS[g]}"></span><span class="name">${c.label}</span>${state.notMapped.has(c.code) ? '<span class="mark" aria-hidden="true">†</span>' : ''}</button>
         <button class="cat-only" aria-label="Show only ${c.label}">only</button>`;
       cell.querySelector('.cat-toggle').onclick = () => {
         state.cats.has(c.code) ? state.cats.delete(c.code) : state.cats.add(c.code);
@@ -244,7 +246,25 @@ async function refresh() {
   const all = meta.categories.length;
   $('.detail .sub').textContent = `${periodLabel()} · ${n === all ? 'all offenses' : `${n} of ${all} offense types`}`;
   renderStatus({ drawable: lt[0] ?? 0, precinctOnly: lt[1] ?? 0, none: lt[2] ?? 0 });
+  renderNotice({ drawable: lt[0] ?? 0, total });
   document.body.dataset.ready = 'true';
+}
+
+// When the selection has nothing to draw, say why instead of showing an empty map.
+function renderNotice({ drawable, total }) {
+  const el = $('.map-notice');
+  if (drawable > 0) { el.hidden = true; return; }
+  const withheld = [...state.cats].filter((c) => state.notMapped.has(c)).map((c) => meta.categories[c].label);
+  if (total > 0 && withheld.length) {
+    el.innerHTML = `<strong>${withheld.join(', ')}: not shown on the map</strong>
+      <p>NYPD does not publish where these offenses happened, to protect victims. Each one is placed at the
+      precinct station house, so we count them in the totals on the right but do not draw them.</p>`;
+  } else if (total > 0) {
+    el.innerHTML = '<strong>Nothing to draw for this selection</strong><p>These complaints have no location in the data. They are counted in the totals on the right.</p>';
+  } else {
+    el.innerHTML = '<strong>No complaints for this selection</strong><p>Try another period or more offense types.</p>';
+  }
+  el.hidden = false;
 }
 
 // ---------- theme switch (Night / Light), bottom left
@@ -285,6 +305,11 @@ async function main() {
   const [m] = await Promise.all([loadJson('meta.json'), initDb()]);
   meta = m;
   state.cats = new Set(meta.categories.map((c) => c.code));
+  const [cells, drawn] = await Promise.all([
+    query('SELECT DISTINCT q, r FROM hex ORDER BY q, r'),
+    query('SELECT cat, sum(n) FILTER (WHERE lt = 0)::INTEGER AS drawn FROM agg_precinct GROUP BY cat'),
+  ]);
+  state.notMapped = new Set(drawn.filter((d) => !d.drawn).map((d) => d.cat));
   renderCategories();
   setupCategoryActions();
   const map = await createMap($('#map'), {
@@ -293,7 +318,11 @@ async function main() {
     categories: meta.categories,
     hooks: { onLegend: renderLegend, loadPoints },
   });
-  if (params.has('db')) window.__nycmap = map;   // test mode only: lets headless tests move the camera
+  setUniverse(cells);
+  if (params.has('db')) {                        // test mode only: hooks for headless tests
+    window.__nycmap = map;
+    window.__hexStats = hexStats;
+  }
   await refresh();
 }
 

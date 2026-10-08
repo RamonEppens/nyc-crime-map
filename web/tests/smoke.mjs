@@ -61,6 +61,38 @@ for (const theme of ['dark', 'light']) {
   await page.waitForTimeout(800);
   console.log(theme, 'only robbery 2025:', await first(), '|', await page.textContent('.detail .sub'));
   await page.screenshot({ path: `${out}/${theme}-only.png` });
+  // Stable hexagon array: same length and order whatever the filter (needed for transitions).
+  const before = await page.evaluate(() => window.__hexStats());
+  await page.click('[data-select="all"]');
+  await page.waitForTimeout(800);
+  const after = await page.evaluate(() => window.__hexStats());
+  console.log(theme, 'hex array: robbery', before.length, '/', before.withData, 'with data | all', after.length, '/', after.withData, '| breaks', after.breaks.join(','));
+  if (before.length !== after.length || JSON.stringify(before.first) !== JSON.stringify(after.first)) errors.push(`${theme}: hexagon array changed length or order`);
+  if (after.breaks.some((b, i) => i && b <= after.breaks[i - 1])) errors.push(`${theme}: breaks not strictly increasing`);
+
+  // Rapid clicks: only the last selection may win.
+  for (const name of ['Burglary', 'Drugs', 'Robbery', 'Weapons', 'Homicide']) {
+    await page.hover(`.cat:has-text("${name}")`);
+    await page.click(`.cat:has-text("${name}") .cat-only`);
+  }
+  await page.waitForTimeout(1200);
+  const sub = await page.textContent('.detail .sub');
+  const bars = await page.textContent('.bars');
+  console.log(theme, 'after rapid clicks:', sub, '|', bars.replace(/\s+/g, ' ').trim());
+  if (!bars.includes('Homicide')) errors.push(`${theme}: rapid clicks did not end on the last selection`);
+
+  // Rape & sex crimes only: nothing to draw, the notice must explain why.
+  await page.hover('.cat:has-text("Rape")');
+  await page.click('.cat:has-text("Rape") .cat-only');
+  await page.waitForTimeout(1000);
+  const notice = await page.isVisible('.map-notice') ? (await page.textContent('.map-notice')).replace(/\s+/g, ' ').trim() : '';
+  console.log(theme, 'rape only:', await first(), '| notice:', notice.slice(0, 90));
+  if (!notice.includes('not shown on the map')) errors.push(`${theme}: no notice for rape & sex crimes`);
+  await page.screenshot({ path: `${out}/${theme}-rape.png` });
+  await page.click('[data-select="all"]');
+  await page.waitForTimeout(800);
+  if (await page.isVisible('.map-notice')) errors.push(`${theme}: notice should hide when there is data`);
+
   await page.click('[data-select="none"]');
   await page.waitForTimeout(800);
   if ((await first()) !== '0') errors.push(`${theme}: None should give 0`);

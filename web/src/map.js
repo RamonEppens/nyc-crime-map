@@ -24,7 +24,13 @@ let grid;
 let theme;
 let categories = [];
 let hooks = {};
+// Hexagons: a fixed "universe" (every hexagon that has ever had a complaint), loaded once in a
+// stable order. Filters only change the counts, never the array length or order, so deck.gl can
+// interpolate each column's height and color in place (attribute transitions work by index).
+const universe = { cells: [], index: new globalThis.Map() };
 const state = { hexes: [], maxN: 1, breaks: [], label: '', points: [], pointsBox: null };
+const key = (q, r) => q * 10000 + r;
+const easeOutCubic = (t) => 1 - (1 - t) ** 3;
 
 const smoothstep = (a, b, x) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -72,13 +78,28 @@ export function setTheme(next) {
   render();
 }
 
-/** rows: [{q, r, n}] for the current filters (only hexagons with n > 0 exist). */
-export function setHexagons(rows, label) {
-  state.hexes = rows.map(({ q, r, n }) => {
+/** cells: [{q, r}] for every hexagon in the data, sorted by (q, r). Call once. */
+export function setUniverse(cells) {
+  universe.cells = cells.map(({ q, r }) => {
     const [lon, lat] = hexCenter(q, r);
-    return { lon, lat, n };
+    return { q, r, lon, lat };
   });
-  state.maxN = state.hexes.reduce((m, d) => Math.max(m, d.n), 1);
+  universe.index = new globalThis.Map(universe.cells.map((c, i) => [key(c.q, c.r), i]));
+}
+
+/** rows: [{q, r, n}] for the current filters. Builds a NEW array over the whole universe:
+ *  hexagons without complaints stay in it with n = 0 (transparent, height 0). */
+export function setHexagons(rows, label) {
+  const hexes = universe.cells.map((c) => ({ lon: c.lon, lat: c.lat, n: 0 }));
+  let max = 1;
+  for (const { q, r, n } of rows) {
+    const i = universe.index.get(key(q, r));
+    if (i === undefined) continue;
+    hexes[i].n = n;
+    if (n > max) max = n;
+  }
+  state.hexes = hexes;
+  state.maxN = max;
   state.label = label;
   updateBreaks();
   render();
@@ -86,11 +107,22 @@ export function setHexagons(rows, label) {
   maybeLoadPoints();
 }
 
+/** For tests: size of the hexagon array, hexagons with data, and the array itself (identity). */
+export function hexStats() {
+  return { length: state.hexes.length, withData: state.hexes.filter((d) => d.n > 0).length,
+    first: state.hexes[0] && [state.hexes[0].lon, state.hexes[0].lat], breaks: state.breaks };
+}
+
 /** Quantile breaks over the hexagons currently in view; the legend is updated to match. */
 function updateBreaks() {
   const b = map.getBounds();
-  const inView = state.hexes.filter((d) => b.contains([d.lon, d.lat])).map((d) => d.n);
-  state.breaks = quantileBreaks(inView.length >= 6 ? inView : state.hexes.map((d) => d.n));
+  const withData = state.hexes.filter((d) => d.n > 0);
+  const inView = withData.filter((d) => b.contains([d.lon, d.lat])).map((d) => d.n);
+  const breaks = quantileBreaks(inView.length >= 6 ? inView : withData.map((d) => d.n));
+  for (let i = 1; i < breaks.length; i++) {        // strictly increasing, so every class is distinct
+    if (breaks[i] <= breaks[i - 1]) breaks[i] = breaks[i - 1] + 1;
+  }
+  state.breaks = breaks;
   hooks.onLegend?.(RAMPS[theme], state.breaks);
 }
 
@@ -129,14 +161,18 @@ function render() {
     extruded: true,
     getElevation: (d) => (d.n / state.maxN) * MAX_HEIGHT_M,
     elevationScale: (1 - m) ** 1.6,
-    getFillColor: (d) => ramp[classify(d.n, state.breaks)],
+    getFillColor: (d) => (d.n > 0 ? [...ramp[classify(d.n, state.breaks)], 235] : [0, 0, 0, 0]),
     opacity: 0.95 * (1 - m) ** 1.3,
+    material: { ambient: 0.6, diffuse: 0.5, shininess: 20, specularColor: [30, 30, 30] },
     visible: m < 1,
     pickable: m < 0.5,
     autoHighlight: true,
     highlightColor: [255, 255, 255, 60],
-    transitions: { getElevation: 600, getFillColor: 400 },
-    updateTriggers: { getFillColor: [state.breaks, theme], getElevation: [state.maxN] },
+    transitions: {
+      getElevation: { duration: 700, easing: easeOutCubic },
+      getFillColor: { duration: 450 },
+    },
+    updateTriggers: { getFillColor: `${state.breaks.join(',')}|${theme}`, getElevation: state.maxN },
   });
   const points = new ScatterplotLayer({
     id: 'points',
@@ -158,7 +194,7 @@ function render() {
 }
 
 function tooltip({ object, layer }) {
-  if (!object) return null;
+  if (!object || !object.n) return null;
   if (layer.id === 'hex') {
     return { className: 'deck-tooltip', html: `<strong>${fmt(object.n)}</strong> complaints<br>${state.label}` };
   }
