@@ -8,7 +8,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { ColumnLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer, PathLayer, TextLayer } from '@deck.gl/layers';
 import { basemapStyle } from './basemap.js';
-import { RAMPS, PRECINCT_RAMPS, GROUP_COLORS, rgb, classify, quantileBreaks } from './colors.js';
+import { RAMPS, PRECINCT_RAMPS, GROUP_RAMPS, GROUP_COLORS, rgb, classify, quantileBreaks } from './colors.js';
 import { fmt } from './format.js';
 import { setGrid, hexCenter } from './geo.js';
 
@@ -39,6 +39,10 @@ const state = { hexes: [], maxN: 1, breaks: [], label: '', points: [], pointsBox
 // changes interpolate in place like the hexagons; each filter only rewrites `units[i].n / shown`.
 const precincts = { units: [], polygons: [], paths: [], version: 0 };
 const key = (q, r) => q * 10000 + r;
+// Offense group whose color the hexagons and precincts take (null = the usual blue).
+let tint = null;
+const hexRamp = () => (tint ? GROUP_RAMPS[tint][theme] : RAMPS[theme]);
+const precinctRamp = () => (tint ? GROUP_RAMPS[tint].light : PRECINCT_RAMPS[theme]);
 const easeOutCubic = (t) => 1 - (1 - t) ** 3;
 
 const smoothstep = (a, b, x) => {
@@ -126,7 +130,7 @@ export function setPrecincts(counts, merged) {
   const breaks = quantileBreaks(precincts.units.filter((x) => x.shown).map((x) => x.n));
   for (let i = 1; i < breaks.length; i++) if (breaks[i] <= breaks[i - 1]) breaks[i] = breaks[i - 1] + 1;
   state.precinctBreaks = breaks;
-  if (state.view === 'precincts') hooks.onLegend?.(PRECINCT_RAMPS[theme], breaks, 'precinct');
+  if (state.view === 'precincts') hooks.onLegend?.(precinctRamp(), breaks, 'precinct');
   render();
 }
 
@@ -195,6 +199,12 @@ export function setHexagons(rows, label) {
   maybeLoadPoints();
 }
 
+/** Offense group to color the map with ('person', 'property', ...) or null for blue. Takes effect
+ *  on the next setHexagons / setPrecincts, so colors and counts change in the same transition. */
+export function setTint(group) {
+  tint = group;
+}
+
 /** Outline of the current selection (GeoJSON Feature) or null. */
 export function setSelection(feature) {
   state.selection = feature;
@@ -203,7 +213,7 @@ export function setSelection(feature) {
 
 /** Move the camera to show a bounding box [[w, s], [e, n]] without changing pitch or bearing. */
 export function showBounds(bounds) {
-  map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 380, right: 60 }, maxZoom: 14,
+  map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 380, right: 440 }, maxZoom: 14,
     pitch: map.getPitch(), bearing: map.getBearing(), duration: 900 });
 }
 
@@ -216,7 +226,7 @@ export function hexStats() {
 /** Quantile breaks over the hexagons currently in view; the legend is updated to match. */
 function updateBreaks() {
   if (state.view === 'precincts') {                // precinct classes do not depend on the viewport
-    hooks.onLegend?.(PRECINCT_RAMPS[theme], state.precinctBreaks, 'precinct');
+    hooks.onLegend?.(precinctRamp(), state.precinctBreaks, 'precinct');
     return;
   }
   const b = map.getBounds();
@@ -227,7 +237,7 @@ function updateBreaks() {
     if (breaks[i] <= breaks[i - 1]) breaks[i] = breaks[i - 1] + 1;
   }
   state.breaks = breaks;
-  hooks.onLegend?.(RAMPS[theme], state.breaks, 'hexagon');
+  hooks.onLegend?.(hexRamp(), state.breaks, 'hexagon');
 }
 
 function viewBox(margin) {
@@ -253,7 +263,7 @@ async function maybeLoadPoints() {
 function render() {
   if (!overlay) return;
   const m = smoothstep(ZOOM_FADE[0], ZOOM_FADE[1], map.getZoom());
-  const ramp = RAMPS[theme].map(rgb);
+  const ramp = hexRamp().map(rgb);
   const k = 1 - state.mix;                          // 1 = hexagon view, 0 = precinct view
   const columns = new ColumnLayer({
     id: 'hex',
@@ -277,7 +287,7 @@ function render() {
       getElevation: { duration: 700, easing: easeOutCubic },
       getFillColor: { duration: 450 },
     },
-    updateTriggers: { getFillColor: `${state.breaks.join(',')}|${theme}`, getElevation: state.maxN },
+    updateTriggers: { getFillColor: `${state.breaks.join(',')}|${theme}|${tint}`, getElevation: state.maxN },
   });
   const points = new ScatterplotLayer({
     id: 'points',
@@ -312,9 +322,9 @@ function render() {
 function precinctLayers() {
   const mix = state.mix;
   if (mix <= 0 || !precincts.units.length) return [];
-  const ramp = PRECINCT_RAMPS[theme].map(rgb);
+  const ramp = precinctRamp().map(rgb);
   const { units, version } = precincts;
-  const triggers = `${version}|${state.precinctBreaks.join(',')}|${theme}`;
+  const triggers = `${version}|${state.precinctBreaks.join(',')}|${theme}|${tint}`;
   const fills = new SolidPolygonLayer({
     id: 'precincts',
     data: precincts.polygons,
@@ -370,11 +380,11 @@ function tooltip({ object, layer }) {
   if (layer?.id === 'precincts' && object) {
     const unit = precincts.units[object.u];
     return { className: 'deck-tooltip',
-      html: `${precinctName(unit.props)}<br><strong>${fmt(unit.n)}</strong> complaint${unit.n === 1 ? '' : 's'} · ${state.label}` };
+      html: `<strong>${precinctName(unit.props)}</strong><br>${fmt(unit.n)} complaint${unit.n === 1 ? '' : 's'} · ${state.label}<span class="tip-hint">Click for details</span>` };
   }
   if (!object || !object.n) return null;
   if (layer.id === 'hex') {
-    return { className: 'deck-tooltip', html: `<strong>${fmt(object.n)}</strong> complaints<br>${state.label}` };
+    return { className: 'deck-tooltip', html: `<strong>${fmt(object.n)}</strong> complaints<br>${state.label}<span class="tip-hint">Click for details</span>` };
   }
   return {
     className: 'deck-tooltip',

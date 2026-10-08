@@ -16,11 +16,18 @@
       <!-- Left column: separate blocks floating over the map -->
       <div class="controls" aria-label="Filters">
         <header class="block brand">
-          <img src="logo.png" alt="" />
-          <div>
-            <h1>NYC Crime Map</h1>
-            <p>Complaints reported to the NYPD</p>
+          <div class="brand-row">
+            <img src="logo.png" alt="" />
+            <div>
+              <h1>NYC Crime Map</h1>
+              <p>NYPD complaints · 2016–2025</p>
+            </div>
           </div>
+          <p class="summary" aria-live="polite">
+            <button class="link" id="city-total" title="Show the New York City summary">Loading data</button>
+            <span id="summary-filter"></span>
+          </p>
+          <p class="summary-sub" id="summary-sub"></p>
         </header>
 
         <div class="block search" role="search">
@@ -52,52 +59,58 @@
           <div class="block-body flush" id="offenses-body">
             <div class="cat-grid" role="group" aria-labelledby="offenses-title"></div>
             <div class="block-foot">
-              <span class="hint">Enforcement offenses mostly reflect police activity. † Location withheld by NYPD: counted, not drawn.</span>
+              <span class="hint" title="Counted in the totals, not drawn on the map">† Location withheld by NYPD</span>
               <span class="foot-actions"><button data-select="all">All</button><button data-select="none">None</button></span>
             </div>
           </div>
         </section>
 
+        <section class="block legend" data-block="legend" aria-labelledby="legend-title">
+          <h2 id="legend-title">Complaints per hexagon</h2>
+          <p class="hint" id="legend-hint">Each color holds about a sixth of the hexagons in view</p>
+          <div class="legend-ramp" aria-hidden="true"></div>
+          <div class="legend-labels"><span class="end start">fewer</span><span class="end stop">more</span></div>
+        </section>
       </div>
 
-      <section class="block legend" data-block="legend">
-        <div class="view-switch" role="radiogroup" aria-label="Map view">
-          <button role="radio" data-view="hex">3D hexagons</button>
-          <button role="radio" data-view="precincts">Precincts</button>
+      <!-- Bottom left: map view and map style -->
+      <div class="switches">
+        <div class="pill view-switch" role="radiogroup" aria-label="Map view">
+          <button role="radio" data-view="hex"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>3D</button>
+          <button role="radio" data-view="precincts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/></svg>Precincts</button>
         </div>
-        <div class="block-head">
-          <h2 id="legend-title">Complaints per hexagon</h2>
-          <button class="block-toggle" aria-expanded="true" aria-controls="legend-body">Hide</button>
+        <div class="pill theme-switch" role="radiogroup" aria-label="Map style">
+          <button role="radio" data-value="dark"><span class="swatch night"></span>Night</button>
+          <button role="radio" data-value="light"><span class="swatch light"></span>Light</button>
         </div>
-        <div class="block-body" id="legend-body">
-          <div class="legend-ramp" aria-hidden="true"></div>
-          <div class="legend-labels"></div>
-          <p class="hint" id="legend-hint">Each color holds about a sixth of the hexagons in view.</p>
-        </div>
-      </section>
-
-      <div class="theme-switch" role="radiogroup" aria-label="Map style">
-        <button role="radio" data-value="dark"><span class="swatch night"></span>Night</button>
-        <button role="radio" data-value="light"><span class="swatch light"></span>Light</button>
       </div>
 
       <div class="block map-notice" role="status" hidden></div>
-      <p class="status" aria-live="polite"><span>Loading data</span></p>
-    </main>
 
-    <aside class="detail" aria-label="Summary" aria-live="polite">
-      <button class="back link" hidden>New York City</button>
-      <h2>New York City</h2>
-      <p class="context" hidden></p>
-      <p class="sub"></p>
-      <div class="figures"></div>
-      <p class="figures-note"></p>
-      <h3 class="section-title">By offense</h3>
-      <div class="bars"></div>
-      <button class="more" hidden></button>
-      <p class="note"></p>
-      <p class="credit">Data: <a href="https://data.cityofnewyork.us/d/qgea-i56i" target="_blank" rel="noopener">NYC Open Data, NYPD Complaint Data Historic</a>. Independent project, not affiliated with the City of New York or the NYPD.</p>
-    </aside>
+      <!-- Right: details of what is selected; only shown when something is -->
+      <aside class="block detail" data-block="detail" aria-label="Details" aria-live="polite" hidden>
+        <div class="detail-head">
+          <h2>New York City</h2>
+          <div class="detail-actions">
+            <button class="block-toggle" aria-expanded="true" aria-controls="detail-body">Hide</button>
+            <button class="close" aria-label="Close details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          </div>
+        </div>
+        <div class="detail-body" id="detail-body">
+          <p class="context" hidden></p>
+          <p class="sub"></p>
+          <div class="figures"></div>
+          <p class="figures-note"></p>
+          <div class="detail-section">
+            <h3 class="section-title">By offense</h3>
+            <div class="bars"></div>
+            <button class="more" hidden></button>
+          </div>
+          <p class="note"></p>
+          <p class="credit">Data: <a href="https://data.cityofnewyork.us/d/qgea-i56i" target="_blank" rel="noopener">NYC Open Data, NYPD Complaint Data Historic</a>, updated <span class="updated"></span>. Independent project, not affiliated with the City of New York or the NYPD.</p>
+        </div>
+      </aside>
+    </main>
   </div>
   <script type="module" src="/src/main.js"></script>
 </body>

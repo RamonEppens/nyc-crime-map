@@ -3,7 +3,7 @@ import './styles.css';
 import { initDb, query, loadJson } from './db.js';
 import {
   createMap, setTheme, setHexagons, setUniverse, hexStats, setSelection, showBounds,
-  setView, setPrecinctShapes, setPrecincts, precinctUnit, precinctName,
+  setView, setPrecinctShapes, setPrecincts, precinctUnit, precinctName, setTint,
 } from './map.js';
 import { hexAt, hexCenter, hexPolygon, featureAt, meters, circlePolygon, bounds, degLat, degLon } from './geo.js';
 import { setupSearch } from './search.js';
@@ -48,18 +48,21 @@ const periodLabel = () => labelOf(state.period);
 function setupBlocks() {
   for (const btn of document.querySelectorAll('.block-toggle')) {
     const body = document.getElementById(btn.getAttribute('aria-controls'));
-    const key = `block:${btn.closest('.block').dataset.block}`;
+    const block = btn.closest('.block').dataset.block;
+    const key = `block:${block}`;
+    const persist = block !== 'detail';           // the details panel opens expanded every time
     const apply = (open) => {
       btn.setAttribute('aria-expanded', String(open));
       btn.textContent = open ? 'Hide' : 'Show';
       body.hidden = !open;
     };
-    apply(pref(key, 'open') === 'open');
+    apply(!persist || pref(key, 'open') === 'open');
     btn.onclick = () => {
       const open = btn.getAttribute('aria-expanded') !== 'true';
       apply(open);
-      savePref(key, open ? 'open' : 'closed');
+      if (persist) savePref(key, open ? 'open' : 'closed');
     };
+    btn.expand = () => apply(true);
   }
 }
 
@@ -151,6 +154,7 @@ function renderCategories() {
     const head = document.createElement('div');
     head.className = 'cat-group';
     head.textContent = GROUP_LABELS[g];
+    if (g === 'enforcement') head.insertAdjacentHTML('beforeend', ' <span class="group-note">· mostly reflect police activity</span>');
     grid.append(head);
     meta.categories.filter((c) => c.group === g).forEach((c, i) => {
       const cell = document.createElement('div');
@@ -187,29 +191,32 @@ function setupCategoryActions() {
 function renderLegend(ramp, breaks, unit = 'hexagon') {
   $('#legend-title').textContent = `Complaints per ${unit}`;
   $('#legend-hint').textContent = unit === 'precinct'
-    ? 'Each color holds about a sixth of the precincts. Includes rape and sex crimes.'
-    : 'Each color holds about a sixth of the hexagons in view.';
+    ? 'A sixth of the precincts per color · incl. sex crimes'
+    : 'Each color holds about a sixth of the hexagons in view';
   $('.legend-ramp').innerHTML = ramp.map((c) => `<span style="background:${c}"></span>`).join('');
-  const labels = ['', ...breaks.map((b) => `>${fmtShort(b)}`)];
-  $('.legend-labels').innerHTML = labels.map((l) => `<span>${l}</span>`).join('');
+  // Each break sits on the boundary between two colors (k / 6 of the width).
+  $('.legend-labels').innerHTML = '<span class="end start">fewer</span>'
+    + breaks.map((b, i) => `<span style="left:${((i + 1) / ramp.length) * 100}%">${fmtShort(b)}</span>`).join('')
+    + '<span class="end stop">more</span>';
 }
 
-function renderFigures({ total, precinctOnly, previous, compare, days }) {
+function renderCity({ total, precinctOnly, previous, compare, days }) {
   const change = compare && previous ? ((total - previous) / previous) * 100 : NaN;
   showFigures([
-    [fmt(total), 'complaints'],
-    [fmt(total / days), 'per day'],
+    fig('Complaints', fmt(total)),
+    fig('Per day', fmt(total / days)),
     compare && previous
-      ? [fmtChange(change), compare.label, true]
-      : [fmt(precinctOnly), 'location withheld', true],
-    [fmt(total / (meta.totals.population_2020 / 1000)), 'per 1,000 residents'],
+      ? fig(compare.label.replace(/^vs /, 'Change vs '), fmtChange(change))
+      : fig('Location withheld', fmt(precinctOnly), 'counted, not on the map'),
+    fig('Per 1,000 residents', fmt(total / (meta.totals.population_2020 / 1000)), '2020 Census population'),
   ]);
 }
 
-/** figures: [[value, label, neutral?, small?], ...] */
+/** One figure tile: short label above, the number, and an optional small note below. */
+const fig = (label, value, note = '', small = false) => ({ label, value, note, small });
 function showFigures(figures, note = '') {
-  $('.figures').innerHTML = figures.map(([v, l, neutral, small]) =>
-    `<div class="figure"><div class="value${neutral ? ' neutral' : ''}${small ? ' small' : ''}">${v}</div><div class="label">${l}</div></div>`).join('');
+  $('.figures').innerHTML = figures.map((f) => `<div class="figure"><div class="label">${f.label}</div>
+    <div class="value${f.small ? ' small' : ''}">${f.value}</div>${f.note ? `<div class="fnote">${f.note}</div>` : ''}</div>`).join('');
   $('.figures-note').textContent = note;
 }
 
@@ -250,18 +257,19 @@ function renderBars(rows) {
   more.onclick = () => { state.showAllBars = !state.showAllBars; renderBars(rows); };
 }
 
-function renderStatus({ drawable, precinctOnly, none, byPrecinct, noPrecinct }) {
-  const updated = new Date(meta.source.rows_updated_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  if (byPrecinct !== undefined) {
-    $('.status').innerHTML = `<span>${fmt(byPrecinct)} by precinct${noPrecinct ? ` · ${fmt(noPrecinct)} without precinct` : ''} · Data as of ${updated}</span>`;
-    return;
-  }
-  $('.status').innerHTML = `<span>${fmt(drawable)} on the map · ${fmt(precinctOnly)} by precinct only`
-    + `${none ? ` · ${fmt(none)} without location` : ''} · Data as of ${updated}</span>`;
+// Summary in the title block: the total for the current filters (a link to the city panel) and
+// what part of it the current view cannot draw.
+function renderSummary({ total, precinctOnly, none, noPrecinct }) {
+  $('#city-total').textContent = `${fmt(total)} complaints`;
+  $('#summary-filter').textContent = `· ${filterLabel()}`;
+  $('#summary-sub').textContent = state.view === 'precincts'
+    ? (noPrecinct ? `${fmt(noPrecinct)} without a precinct` : 'All drawn by precinct')
+    : `${fmt(precinctOnly + none)} not on the map (location withheld)`;
 }
 
 // ---------- selection: a neighborhood (NTA) or a hexagon, shown in the right panel
 const CITY_NOTE = 'Counts are complaints reported to the NYPD. They are not arrests or convictions, and they do not measure risk.';
+const updatedLabel = () => new Date(meta.source.rows_updated_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 const filterLabel = () => {
   const n = state.cats.size;
   const all = meta.categories.length;
@@ -271,8 +279,6 @@ const filterLabel = () => {
 function renderHeader(title, context) {
   $('.detail h2').textContent = title;
   $('.detail .sub').textContent = filterLabel();
-  const back = $('.detail .back');
-  back.hidden = !state.selected;
   const ctx = $('.detail .context');
   ctx.innerHTML = context ?? '';
   ctx.hidden = !context;
@@ -329,6 +335,11 @@ function selectAddress(lngLat, label) {
   showBounds(bounds(circlePolygon(lngLat, RADIUS_M * 3)));
   refresh();
 }
+function selectCity() {
+  state.selected = { kind: 'city' };
+  setSelection(null);
+  refresh();
+}
 function clearSelection() {
   state.selected = null;
   $('#search').value = '';
@@ -372,10 +383,10 @@ async function renderSelection(ticket) {
     const rate = total / Math.max(1, info.population);
     renderHeader(info.name, `<button class="link" data-boro="${info.boro}">${meta.boroughs[info.boro]}</button> · neighborhood (2020 NTA) · ${info.population ? `${fmt(info.population)} residents` : 'no resident population'}`);
     showFigures([
-      [fmt(total), 'complaints'],
-      residential ? [`${(rate / cityRate).toFixed(1)}×`, 'the city rate per resident', true] : ['n/a', 'few or no residents', true],
-      [top(byCat), 'most frequent', true, true],
-      residential ? [ordinal(percentileOf(rates, rate)), 'percentile among neighborhoods', true] : ['n/a', 'not ranked', true],
+      fig('Complaints', fmt(total)),
+      residential ? fig('Index', `${(rate / cityRate).toFixed(1)}×`, 'the city rate per resident') : fig('Index', 'n/a', 'few or no residents'),
+      fig('Most frequent', top(byCat), '', true),
+      residential ? fig('Percentile', ordinal(percentileOf(rates, rate)), 'among neighborhoods, per resident') : fig('Percentile', 'n/a', 'not ranked'),
     ], changeNote(total, prev[0]?.n ?? 0, compare));
     renderBars(byCat);
     $('.detail .note').textContent = 'Neighborhood counts include only complaints with a map location. Rape, sex crimes and others NYPD places at station houses are counted citywide and by precinct.';
@@ -394,10 +405,10 @@ async function renderSelection(ticket) {
     const cityRate = (city[0]?.n ?? 0) / meta.totals.population_2020;
     renderHeader(meta.boroughs[sel.code], `Borough · ${fmt(population)} residents (2020 Census)`);
     showFigures([
-      [fmt(total), 'complaints'],
-      [fmt(rate * 1000), 'per 1,000 residents'],
-      cityRate ? [`${(rate / cityRate).toFixed(1)}×`, 'the city rate per resident', true] : ['n/a', 'no comparison', true],
-      [top(byCat), 'most frequent', true, true],
+      fig('Complaints', fmt(total)),
+      fig('Per 1,000 residents', fmt(rate * 1000)),
+      cityRate ? fig('Index', `${(rate / cityRate).toFixed(1)}×`, 'the city rate per resident') : fig('Index', 'n/a'),
+      fig('Most frequent', top(byCat), '', true),
     ], changeNote(total, prev[0]?.n ?? 0, compare));
     renderBars(byCat);
     $('.detail .note').textContent = 'Borough counts include every complaint, also rape and sex crimes, which NYPD places only at the precinct station house.';
@@ -424,10 +435,10 @@ async function renderSelection(ticket) {
     const rank = 1 + [...units.values()].filter((n) => n > total).length;
     renderHeader(precinctName(sel.props), `${meta.boroughs[boro[0]?.boro] ?? 'New York City'} · NYPD precinct${sel.props.merged ? 's, shown together: the 116th was created from the 105th and 113th in December 2024' : ''}`);
     showFigures([
-      [fmt(total), 'complaints'],
-      [fmt(total / daysOf(monthsOf(state.period))), 'per day', true],
-      [ordinal(rank), `most complaints of ${units.size} precincts`, true],
-      [top(byCat), 'most frequent', true, true],
+      fig('Complaints', fmt(total)),
+      fig('Per day', fmt(total / daysOf(monthsOf(state.period)))),
+      fig('Rank', ordinal(rank), `of ${units.size} precincts, by complaints`),
+      fig('Most frequent', top(byCat), '', true),
     ], changeNote(total, prev[0]?.n ?? 0, compare));
     renderBars(byCat);
     $('.detail .note').textContent = 'Precinct counts use NYPD\'s precinct field and include every complaint, also rape and sex crimes. Precincts differ a lot in size, population and visitors, so compare them with care.';
@@ -449,10 +460,10 @@ async function renderSelection(ticket) {
       ? `About 8 blocks, 180 m per side · in <button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>`
       : 'About 8 blocks, 180 m per side');
     showFigures([
-      [fmt(total), 'complaints'],
-      median ? [`${(total / median).toFixed(1)}×`, 'the median hexagon', true] : ['n/a', 'no comparison', true],
-      [top(byCat), 'most frequent', true, true],
-      [ordinal(percentileOf(values, total)), 'percentile among hexagons', true],
+      fig('Complaints', fmt(total)),
+      median ? fig('Index', `${(total / median).toFixed(1)}×`, 'the median hexagon') : fig('Index', 'n/a'),
+      fig('Most frequent', top(byCat), '', true),
+      fig('Percentile', ordinal(percentileOf(values, total)), 'among hexagons with complaints'),
     ], changeNote(total, prev[0]?.n ?? 0, compare));
     renderBars(byCat);
     $('.detail .note').textContent = 'NYPD places each complaint at the nearest intersection or mid-block, so a hexagon counts the complaints snapped inside it. Rape and sex crimes are never placed on the map.';
@@ -502,13 +513,21 @@ async function renderAddress(sel, ticket, compare, top, sum) {
   const ntaName = nta?.properties.name;
   renderHeader(sel.label, `Within ${RADIUS_M}&nbsp;m, about 2 blocks${ntaName ? ` · in <button class="link" data-nta="${code}">${ntaName}</button>` : ''}`);
   showFigures([
-    [fmt(total), `complaints within ${RADIUS_M}&nbsp;m`],
-    median ? [`${(total / median).toFixed(1)}×`, `the typical ${RADIUS_M}&nbsp;m area in ${ntaName}`, true] : ['n/a', 'no comparison', true],
-    [top(byCat), 'most frequent', true, true],
-    areas.length ? [ordinal(percentileOf(areas, total)), `percentile among ${fmt(areas.length)} areas in this neighborhood`, true] : ['n/a', 'not ranked', true],
+    fig(`Within ${RADIUS_M}&nbsp;m`, fmt(total), 'complaints'),
+    median ? fig('Index', `${(total / median).toFixed(1)}×`, `the typical ${RADIUS_M}&nbsp;m area in ${ntaName}`) : fig('Index', 'n/a'),
+    fig('Most frequent', top(byCat), '', true),
+    areas.length ? fig('Percentile', ordinal(percentileOf(areas, total)), `among ${fmt(areas.length)} areas in this neighborhood`) : fig('Percentile', 'n/a', 'not ranked'),
   ], changeNote(total, previous, compare));
   renderBars(byCat);
   $('.detail .note').textContent = 'Counts only complaints with a map location; NYPD places them at the nearest intersection or mid-block. Rape and sex crimes are never placed on the map.';
+}
+
+// The map takes an offense group's color when every selected type belongs to that group
+// (one type, or a whole group); all types or a mix of groups keep the usual blue.
+function selectionGroup() {
+  if (!state.cats.size || state.cats.size === meta.categories.length) return null;
+  const groups = new Set([...state.cats].map((c) => meta.categories[c].group));
+  return groups.size === 1 ? [...groups][0] : null;
 }
 
 // ---------- refresh everything for the current filters
@@ -526,28 +545,29 @@ async function refresh() {
     precinctGeo ? query(`SELECT pct, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()} GROUP BY 1`) : [],
   ]);
   if (ticket !== pending) return;      // a newer refresh started; drop this one
+  setTint(selectionGroup());                      // before both layers, so they change color together
   if (precinctGeo) setPrecincts(new Map(byPct.map((r) => [r.pct, r.n])), precinctMerged());
 
   const lt = Object.fromEntries(byLt.map((r) => [r.lt, r.n]));
   const total = (lt[0] ?? 0) + (lt[1] ?? 0) + (lt[2] ?? 0);
   setHexagons(hex, periodLabel());
-  if (state.selected) {
-    await renderSelection(ticket);
-  } else {
-    renderHeader('New York City', null);
-    renderFigures({ total, precinctOnly: lt[1] ?? 0, previous: previous[0]?.n, compare, days: daysOf(monthsOf(state.period)) });
+  const panel = $('.detail');
+  if (state.selected?.kind === 'city') {
+    renderHeader('New York City', `All five boroughs · ${fmt(meta.totals.population_2020)} residents (2020 Census)`);
+    renderCity({ total, precinctOnly: lt[1] ?? 0, previous: previous[0]?.n, compare, days: daysOf(monthsOf(state.period)) });
     renderBars(byCat);
     $('.detail .note').textContent = CITY_NOTE;
+  } else if (state.selected) {
+    await renderSelection(ticket);
   }
   if (ticket !== pending) return;
-  if (state.view === 'precincts') {
-    const noPct = byPct.find((r) => r.pct < 0)?.n ?? 0;
-    renderStatus({ byPrecinct: total - noPct, noPrecinct: noPct });
-    renderNotice({ drawable: total, total });       // every complaint with a precinct is drawn
-  } else {
-    renderStatus({ drawable: lt[0] ?? 0, precinctOnly: lt[1] ?? 0, none: lt[2] ?? 0 });
-    renderNotice({ drawable: lt[0] ?? 0, total });
+  if (panel.hidden !== !state.selected) {          // opening: always start expanded
+    panel.hidden = !state.selected;
+    if (state.selected) panel.querySelector('.block-toggle').expand();
   }
+  const noPrecinct = byPct.find((r) => r.pct < 0)?.n ?? 0;
+  renderSummary({ total, precinctOnly: lt[1] ?? 0, none: lt[2] ?? 0, noPrecinct });
+  renderNotice(state.view === 'precincts' ? { drawable: total, total } : { drawable: lt[0] ?? 0, total });
   document.body.dataset.ready = 'true';
 }
 
@@ -630,7 +650,9 @@ async function main() {
   const [m, g] = await Promise.all([loadJson('meta.json'), loadJson('nta.geojson'), initDb()]);
   meta = m;
   ntaGeo = g;
-  $('.detail .back').onclick = clearSelection;
+  $('.detail .close').onclick = clearSelection;
+  $('#city-total').onclick = () => (state.selected?.kind === 'city' ? clearSelection() : selectCity());
+  $('.detail .updated').textContent = updatedLabel();
   const places = [
     ...[1, 3, 4, 2, 5].map((code) => ({ kind: 'borough', code, label: meta.boroughs[code], detail: 'Borough' })),
     ...meta.ntas.map((n) => ({ kind: 'nta', code: n.code, label: n.name, detail: `Neighborhood · ${meta.boroughs[n.boro]}` })),
@@ -658,15 +680,20 @@ async function main() {
     hooks: { onLegend: renderLegend, loadPoints, onPick },
   });
   setUniverse(cells);
+  // The details panel ends above the zoom buttons and credits, whatever their size.
+  const brControls = document.querySelector('.maplibregl-ctrl-bottom-right');
+  const fitPanel = () => document.documentElement.style.setProperty('--controls-br', `${brControls.offsetHeight + 16}px`);
+  new ResizeObserver(fitPanel).observe(brControls);
+  fitPanel();
   if (params.has('db')) {                        // test mode only: hooks for headless tests
     window.__nycmap = map;
     window.__hexStats = hexStats;
-    window.__select = { precinct: (pct) => selectPrecinct(precinctUnit(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, address: selectAddress, clear: clearSelection };
+    window.__select = { city: selectCity, precinct: (pct) => selectPrecinct(precinctUnit(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, address: selectAddress, clear: clearSelection };
   }
   await refresh();
 }
 
 main().catch((err) => {
   console.error(err);
-  $('.status').innerHTML = `<span>Could not load the data: ${err.message}</span>`;
+  $('#city-total').textContent = `Could not load the data: ${err.message}`;
 });

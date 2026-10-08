@@ -15,6 +15,30 @@ export const PRECINCT_RAMPS = {
   light: ['#dbe8f4', '#b1cde8', '#7fabd6', '#4a88c2', '#2468a5', '#123f69'],
 };
 
+// When the offense selection falls inside ONE group, the hexagons and precincts take that group's
+// color (same 6 classes, same quantile breaks); a mixed or full selection goes back to blue.
+//   dark: hexagons on the dark basemap, dark (few) -> group color (many)
+//   light: hexagons on the light basemap, and precincts in both themes, pale (few) -> deep (many)
+// Hand-tuned, not mixed with black: yellow and red turn muddy (olive, brown) when simply darkened.
+export const GROUP_RAMPS = {
+  person: {
+    dark: ['#3a1d1c', '#552826', '#713431', '#8f413c', '#b05550', '#d46c66'],
+    light: ['#f6dcda', '#efb9b5', '#e3928c', '#d46c66', '#b44c47', '#8a3330'],
+  },
+  property: {
+    dark: ['#1c2038', '#262d52', '#323c6d', '#3f4c8a', '#5162a6', '#6f82c8'],
+    light: ['#e0e4f4', '#c0c8e8', '#9aa6d8', '#7584c6', '#5566ab', '#3c4a8a'],
+  },
+  enforcement: {
+    dark: ['#33291a', '#4d3d20', '#6b5427', '#8c6e30', '#b8933f', '#eac66c'],
+    light: ['#faf1d6', '#f3e1a8', '#e8c96f', '#d2a940', '#a98224', '#7a5c15'],
+  },
+  other: {
+    dark: ['#222224', '#303033', '#424246', '#58585d', '#76767c', '#9a9aa0'],
+    light: ['#ececee', '#d6d6da', '#b8b8bd', '#96969c', '#727278', '#505055'],
+  },
+};
+
 // Points are colored by offense group (4 colors are distinguishable; 18 would not be).
 export const GROUP_COLORS = {
   person: '#d46c66',

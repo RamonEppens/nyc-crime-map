@@ -60,9 +60,11 @@ python tests/sql_server.py & npm run test:smoke   # headless test with the real 
 - Basemaps: CARTO dark-matter / positron.
 - Font: Public Sans only, self-hosted (@fontsource). Tabular figures for numbers.
 - No icon libraries, emojis, gradients, glows, drop-shadow cards, bento grids or em dashes in copy.
-  Separation by hairlines; radius 3 px for marks and inputs, 10 px for the floating blocks over the map.
-- Layout: map full width; left blocks (brand, Date range, Offense types), legend block top right,
-  Night/Light pill bottom left, summary panel on the right. Time logic lives in `src/period.js`.
+  Separation by hairlines; radius 3 px for marks, 10 px for inputs and rows, 16 px for the floating blocks.
+- Layout (same as Ramón's BA map): map full width; every control on the left (brand with the total,
+  search, Date range, Offense types, legend); 3D/Precincts and Night/Light pills bottom left; the
+  details panel floats on the right only while something is selected (the total opens the city).
+  Time logic lives in `src/period.js`.
 
 ## Data conventions
 - Raw snapshot keeps every column as text, untouched. All parsing/cleaning happens downstream
