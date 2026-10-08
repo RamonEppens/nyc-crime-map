@@ -7,10 +7,11 @@ export const RAMPS = {
   light: ['#cfe0f0', '#a8c8e6', '#7aa9d6', '#4a88c2', '#2470ad', '#154f80'],
 };
 
-// Precincts (flat 2D fills): same blue as the hexagons, so blue always means "more complaints",
-// but spread wider in lightness, because flat polygons get no shading to separate the classes.
+// Precincts (flat 2D fills): pale (few complaints) -> deep blue (many) in BOTH themes, the way
+// choropleths are read ("darker = more"). On the dark basemap the deepest class stays saturated
+// enough to stand apart from the background.
 export const PRECINCT_RAMPS = {
-  dark: ['#173049', '#1e4466', '#265b86', '#2f73a6', '#4a90c4', '#79b2de'],
+  dark: ['#d3e3f2', '#a6c6e5', '#77a5d3', '#4c85c0', '#2f68aa', '#1c4e8e'],
   light: ['#dbe8f4', '#b1cde8', '#7fabd6', '#4a88c2', '#2468a5', '#123f69'],
 };
 
