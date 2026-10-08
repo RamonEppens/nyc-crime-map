@@ -9,6 +9,8 @@
 //                streets, kept only where that number exists on a segment (street_segments).
 //   4. STREETS   otherwise: the matching areas plus up to 5 whole streets.
 // A borough at the end ("..., brooklyn", "bk") narrows every rule to that borough.
+// Results are shown in sections (exact locations, streets, boroughs, neighborhoods, parks, other
+// places, precincts); every section but exact locations has "See all", a full list to browse.
 // Street matching: every typed word must be the start of a word of the street's key (clave, same
 // function as the pipeline); a typed number must match whole unless it is the word being typed.
 import { clave } from './streetnames.js';
@@ -135,20 +137,38 @@ export function locateOnSegment(seg, n) {
 const listSql = (ids) => ids.join(',') || '-1';
 
 // ---------------------------------------------------------------- the four rules
+// Sections, in their default order; within a search they are ordered by their best match.
+export const GROUPS = [
+  { key: 'point', title: 'Exact locations', icon: 'pin' },
+  { key: 'borough', title: 'Boroughs', icon: 'area', all: 'boroughs' },
+  { key: 'nta', title: 'Neighborhoods', icon: 'area', all: 'neighborhoods' },
+  { key: 'park', title: 'Parks', icon: 'area', all: 'parks' },
+  { key: 'place', title: 'Other places', icon: 'area', all: 'other places (airports, cemeteries...)' },
+  { key: 'precinct', title: 'Precincts', icon: 'area', all: 'precincts' },
+  { key: 'street', title: 'Streets', icon: 'street', all: 'streets' },
+];
+const GROUP = Object.fromEntries(GROUPS.map((g, i) => [g.key, { ...g, order: i }]));
+const BORO_ORDER = [1, 3, 4, 2, 5];
+const PER_GROUP = { point: 6, street: 5, borough: 3, nta: 3, park: 3, place: 3, precinct: 3 };
+
+/** Sections for the empty box: the five boroughs, and a "See all" for every other list. */
+export function browseStart(places) {
+  return GROUPS.filter((g) => g.key !== 'point' && g.key !== 'street').map((g) => {
+    const all = places.filter((p) => p.group === g.key);
+    return { key: g.key, title: g.title, icon: g.icon, total: all.length, items: g.key === 'borough' ? all : [] };
+  });
+}
+
 /**
- * deps: { query, places: [{type:'area', level, code, label, detail}], ntaName(code), ntaAt(lngLat), boroName(code) }
- * Returns result items: {type:'point'|'street'|'area', label, detail, ...}
+ * deps: { query, places: [{type:'area', level, group, code, boro, label, detail}], ntaName(code),
+ *         ntaAt(lngLat), boroName(code) }
+ * Returns sections: [{key, title, icon, items, total}] (items: {type:'point'|'street'|'area', ...}).
  */
 export async function suggest(raw, deps) {
-  let text = raw.trim().replace(/,/g, ' ').replace(/\s+/g, ' ');
-  let boro = 0;
-  for (const [re, b] of BOROUGH_WORDS) {
-    const m = re.exec(text);
-    if (m && m.index > 0) { boro = b; text = text.slice(0, m.index).trim(); break; }
-  }
+  const { text, boro } = splitBorough(raw);
   if (!text) return [];
-  // Subtitle of a point: its borough and the neighborhood it falls in.
   const placeOf = (s, lngLat) => [deps.boroName(s.boro), deps.ntaAt(lngLat)].filter(Boolean).join(' · ');
+  const section = (key, items, total = items.length, rank = 0) => ({ ...GROUP[key], items: items.slice(0, PER_GROUP[key]), total, rank });
 
   // 1. corner
   const parts = text.split(CORNER_SPLIT).map((p) => p.trim()).filter(Boolean);
@@ -162,27 +182,28 @@ export async function suggest(raw, deps) {
     const rankA = new Map(A.map((s, i) => [s.id, i]));
     const rankB = new Map(B.map((s, i) => [s.id, i]));
     const seen = new Set();
-    return rows
+    const items = rows
       .map((r) => {
         const [sa, sb] = rankA.has(r.a) && rankB.has(r.b) ? [r.a, r.b] : [r.b, r.a];
-        return { ...r, sa, sb, rank: (rankA.get(sa) ?? 9) * 10 + (rankB.get(sb) ?? 9) };
+        return { ...r, sa, sb, rank: (rankA.get(sa) ?? 9) * 100 + (rankB.get(sb) ?? 99) };
       })
       .sort((p, q) => p.rank - q.rank)
       .filter((r) => !seen.has(`${r.x},${r.y}`) && seen.add(`${r.x},${r.y}`))   // one result per place
-      .slice(0, 6)
       .map((r) => {
         const a = streetById(r.sa); const b = streetById(r.sb);
         const lngLat = [r.x / 1e5, r.y / 1e5];
         return { type: 'point', kind: 'corner', label: `${a.name} & ${b.name}`, detail: `Corner · ${placeOf(a, lngLat)}`, lngLat };
       });
+    return items.length ? [section('point', items)] : [];
   }
 
   // 2. areas (precinct patterns first, so "75th precinct" never becomes an address)
-  const areas = matchAreas(text, deps.places, boro);
-  const isPrecinctQuery = PRECINCT.some((re) => re.test(text));
-  if (isPrecinctQuery) return areas;
+  // "See all" on an area section opens the whole category, so it shows the category's size.
+  const areaSections = groupAreas(matchAreas(text, deps.places, boro), section,
+    (key) => deps.places.filter((p) => p.group === key).length);
+  if (PRECINCT.some((re) => re.test(text))) return areaSections;
   const bare = BARE_NUMBER.exec(text);
-  if (bare && !bare[2]) return areas;                               // "75": only the precinct
+  if (bare && !bare[2]) return areaSections;                         // "75": only the precinct
 
   // 3. address
   const addr = ADDRESS.exec(text);
@@ -200,20 +221,41 @@ export async function suggest(raw, deps) {
         const p = locateOnSegment(r, n);
         if (p) found.set(r.street, p);
       }
-      const out = cands.filter((s) => found.has(s.id)).slice(0, 6).map((s) => ({
+      const items = cands.filter((s) => found.has(s.id)).map((s) => ({
         type: 'point', kind: 'address', label: `${addr[1]} ${s.name}`, detail: placeOf(s, found.get(s.id)), lngLat: found.get(s.id),
       }));
-      if (out.length) return [...areas, ...out];
+      if (items.length) return [section('point', items), ...areaSections];
     }
   }
 
-  // 4. plain text: areas + whole streets
-  const streets = matchStreets(text, boro, 5).map((s) => ({
-    type: 'street', id: s.id, label: s.name,
+  // 4. plain text: areas + whole streets, each section ordered by its best match
+  const key = clave(text);
+  const streets = matchStreets(text, boro, 2000);
+  const sections = [...areaSections];
+  if (streets.length) {
+    const best = streets[0].key === key ? 0 : streets[0].key.startsWith(key) ? 1 : 2;
+    sections.push(section('street', streets.map((s) => streetItem(s, deps)), streets.length, best));
+  }
+  return sections.sort((a, b) => a.rank - b.rank || a.order - b.order);
+}
+
+function streetItem(s, deps) {
+  return {
+    type: 'street', id: s.id, label: s.name, boro: s.boro,
     detail: `Whole street · ${deps.boroName(s.boro)}${s.nNtas > 2 ? ` · ${s.nNtas} neighborhoods`
       : s.ntas.length ? ` · ${s.ntas.map(deps.ntaName).join(', ')}` : ''}`,
-  }));
-  return [...areas, ...streets];
+  };
+}
+
+/** "350 5th ave, brooklyn" -> {text: '350 5th ave', boro: 3} */
+function splitBorough(raw) {
+  let text = raw.trim().replace(/,/g, ' ').replace(/\s+/g, ' ');
+  let boro = 0;
+  for (const [re, b] of BOROUGH_WORDS) {
+    const m = re.exec(text);
+    if (m && m.index > 0) { boro = b; text = text.slice(0, m.index).trim(); break; }
+  }
+  return { text, boro };
 }
 
 function matchAreas(text, places, boro) {
@@ -235,22 +277,52 @@ function matchAreas(text, places, boro) {
     const rank = name === q ? 0 : name.startsWith(q) ? 1 : name.split(' ').some((w) => w.startsWith(q)) ? 2 : -1;
     if (rank >= 0) hits.push({ p, rank });
   }
-  const LEVEL = { borough: 0, nta: 1, precinct: 2 };
-  hits.sort((a, b) => a.rank - b.rank || LEVEL[a.p.level] - LEVEL[b.p.level] || naturalCompare(a.p.label, b.p.label));
-  return hits.slice(0, 3).map((h) => h.p);
+  hits.sort((a, b) => a.rank - b.rank || naturalCompare(a.p.label, b.p.label));
+  return hits;
+}
+
+/** Area hits -> one section per group (boroughs, neighborhoods, parks, other places, precincts). */
+function groupAreas(hits, section, categorySize) {
+  const by = new Map();
+  for (const h of hits) {
+    if (!by.has(h.p.group)) by.set(h.p.group, []);
+    by.get(h.p.group).push(h);
+  }
+  return [...by].map(([key, hs]) => section(key, hs.map((h) => h.p), categorySize(key), hs[0].rank));
+}
+
+/** The full list behind "See all": areas of one kind, or every street matching the text, by borough. */
+export function browseList(key, raw, deps) {
+  const byBoro = (items) => BORO_ORDER
+    .map((b) => ({ title: deps.boroName(b), items: items.filter((it) => it.boro === b) }))
+    .filter((sec) => sec.items.length);
+  if (key === 'street') {
+    const { text, boro } = splitBorough(raw);
+    const items = matchStreets(text, boro, 5000).map((s) => streetItem(s, deps))
+      .sort((a, b) => naturalCompare(a.label, b.label));
+    return { title: `Streets matching “${raw.trim()}”`, total: items.length, sections: byBoro(items) };
+  }
+  const items = deps.places.filter((p) => p.group === key)
+    .sort((a, b) => (key === 'precinct' ? a.code - b.code : naturalCompare(a.label, b.label)));
+  if (key === 'borough') return { title: 'All boroughs', total: items.length, sections: [{ title: '', items }] };
+  return { title: `All ${GROUP[key].all}`, total: items.length, sections: byBoro(items) };
 }
 
 // ---------------------------------------------------------------- the combobox
 /**
  * input, list: elements; deps: see suggest(); onChoose(item); onFocus(): load what search needs.
+ * The list is built from rows: section titles (with "See all" when there is more to browse),
+ * results, and in a full list a "Back" row. Arrow keys move over results, "See all" and "Back".
  */
 export function setupSearch(input, list, deps, onChoose, onFocus) {
   const block = input.closest('.search');
   const clear = block.querySelector('.search-clear');
-  let items = [];
+  let rows = [];               // {kind: 'title'|'sub'|'item'|'all'|'back', ...}
   let active = -1;
   let timer;
   let ticket = 0;
+  let browsing = null;         // key of the full list being browsed, or null
+  const selectable = () => rows.map((r, i) => (r.kind === 'item' || r.kind === 'all' || r.kind === 'back' ? i : -1)).filter((i) => i >= 0);
 
   const setOpen = (open) => {
     list.hidden = !open;
@@ -258,31 +330,87 @@ export function setupSearch(input, list, deps, onChoose, onFocus) {
     input.setAttribute('aria-expanded', String(open));
   };
   const close = () => { setOpen(false); input.removeAttribute('aria-activedescendant'); active = -1; };
+  const icon = (name) => `<span class="opt-icon icon-${name}" aria-hidden="true"></span>`;
+  const rowHtml = (r, i) => {
+    const sel = i === active;
+    if (r.kind === 'title') {
+      return `<li class="search-group" role="presentation"><span>${esc(r.title)}</span>${r.allIndex != null
+        ? `<span class="search-all" role="option" id="search-opt-${r.allIndex}" data-i="${r.allIndex}" aria-selected="${r.allIndex === active}">See all ${r.total}</span>` : ''}</li>`;
+    }
+    if (r.kind === 'sub') return `<li class="search-sub" role="presentation">${esc(r.title)}</li>`;
+    if (r.kind === 'back') {
+      return `<li class="search-back" role="option" id="search-opt-${i}" data-i="${i}" aria-selected="${sel}">
+        <span class="back-arrow" aria-hidden="true"></span><span>${esc(r.title)}</span><span class="search-count">${r.total}</span></li>`;
+    }
+    if (r.kind === 'all') return '';                     // drawn inside its section title
+    return `<li role="option" id="search-opt-${i}" aria-selected="${sel}" data-i="${i}">${icon(r.icon)}
+      <span class="opt-text"><span class="opt-label">${esc(r.item.label)}</span>${r.item.detail ? `<span class="opt-detail">${esc(r.item.detail)}</span>` : ''}</span></li>`;
+  };
   const render = (status = '') => {
-    list.innerHTML = items.map((it, i) => `<li role="option" id="search-opt-${i}" aria-selected="${i === active}" data-i="${i}">
-        <span class="opt-label">${esc(it.label)}</span><span class="opt-detail">${esc(it.detail)}</span></li>`).join('')
-      + (status ? `<li class="search-status" role="presentation">${status}</li>` : '');
-    setOpen(items.length > 0 || !!status);
+    list.innerHTML = rows.map(rowHtml).join('') + (status ? `<li class="search-status" role="presentation">${status}</li>` : '');
+    setOpen(rows.length > 0 || !!status);
     if (active >= 0) {
       input.setAttribute('aria-activedescendant', `search-opt-${active}`);
       list.querySelector(`#search-opt-${active}`)?.scrollIntoView({ block: 'nearest' });
     } else input.removeAttribute('aria-activedescendant');
   };
-  const choose = (it) => {
+  /** Sections -> rows. A section title carries "See all" (a selectable row of its own). */
+  const fromSections = (sections, detailOf = (it) => it.detail) => {
+    const out = [];
+    for (const sec of sections) {
+      const title = { kind: 'title', title: sec.title, total: sec.total };
+      out.push(title);
+      if (GROUP[sec.key]?.all && sec.total > sec.items.length) {        // only when there is more to see
+        title.allIndex = out.length;
+        out.push({ kind: 'all', key: sec.key, total: sec.total });
+      }
+      for (const it of sec.items) out.push({ kind: 'item', item: { ...it, detail: detailOf(it, sec) }, icon: sec.icon });
+    }
+    return out;
+  };
+  const choose = (r) => {
+    if (r.kind === 'all') return openList(r.key);
+    if (r.kind === 'back') return closeList();
+    const it = r.item;
     input.value = it.label;
     clear.hidden = false;
+    browsing = null;
     close();
     input.blur();
     onChoose(it);
   };
 
+  function openList(key) {
+    browsing = key;
+    const res = browseList(key, input.value, deps);
+    const icon = GROUP[key].icon;
+    rows = [{ kind: 'back', title: res.title, total: res.total }];
+    for (const sec of res.sections) {
+      if (sec.title) rows.push({ kind: 'sub', title: sec.title });
+      for (const it of sec.items) {
+        rows.push({ kind: 'item', icon, item: { ...it, detail: key === 'street' ? it.detail.replace(/^Whole street · [^·]+(· )?/, '') : '' } });
+      }
+    }
+    list.dataset.query = `all:${key}`;
+    active = selectable()[1] ?? 0;
+    render();
+    list.scrollTop = 0;
+    input.focus();
+  }
+  function closeList() {
+    browsing = null;
+    update();
+    input.focus();
+  }
+
   async function update() {
     clearTimeout(timer);
     const text = input.value.trim();
     clear.hidden = !input.value;
+    browsing = null;
     const my = ++ticket;
-    if (!text) {                                     // empty box: the five boroughs
-      items = deps.places.filter((p) => p.level === 'borough');
+    if (!text) {                                     // empty box: boroughs, and every list to browse
+      rows = fromSections(browseStart(deps.places), (it) => (it.level === 'borough' ? '' : it.detail));
       list.dataset.query = '';
       active = -1;
       render();
@@ -291,38 +419,46 @@ export function setupSearch(input, list, deps, onChoose, onFocus) {
     timer = setTimeout(async () => {
       try {
         await deps.ready();
-        const res = await suggest(text, deps);
+        const sections = await suggest(text, deps);
         if (my !== ticket) return;                   // a newer keystroke won
-        items = res;
+        // Inside a section the kind is in its title, so details keep only what tells results apart.
+        rows = fromSections(sections, (it, sec) => (sec.key === 'street' ? it.detail.replace(/^Whole street · /, '')
+          : sec.key === 'point' ? it.detail : it.level === 'borough' ? '' : (it.boroName ?? it.detail)));
         list.dataset.query = text;                   // which text these results answer (tests wait on it)
-        active = items.length ? 0 : -1;              // the first suggestion is what Enter picks
-        render(items.length ? '' : 'No results. Try "350 5th Ave" or "5th Ave and 42nd St".');
+        active = rows.findIndex((r) => r.kind === 'item');   // the first result is what Enter picks
+        render(rows.length ? '' : 'No results. Try "350 5th Ave" or "5th Ave and 42nd St".');
       } catch (err) {
         if (my !== ticket) return;
         console.error(err);
-        items = [];
+        rows = [];
         render('Search is unavailable right now');
       }
     }, DEBOUNCE_MS);
   }
 
+  const move = (step) => {
+    const sel = selectable();
+    if (!sel.length) return;
+    const k = sel.indexOf(active);
+    active = sel[(k + step + sel.length) % sel.length];
+    render();
+  };
   input.addEventListener('input', update);
-  input.addEventListener('focus', () => { onFocus?.(); update(); });
+  input.addEventListener('focus', () => { onFocus?.(); if (!browsing) update(); });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown' && items.length) {
-      if (list.hidden) update(); else active = (active + 1) % items.length;
-      render(); e.preventDefault();
-    } else if (e.key === 'ArrowUp' && items.length) {
-      active = (active - 1 + items.length) % items.length; render(); e.preventDefault();
-    } else if (e.key === 'Enter' && items.length && !list.hidden) {
-      choose(items[Math.max(0, active)]); e.preventDefault();
-    } else if (e.key === 'Escape' && !list.hidden) {
-      close(); e.stopPropagation();
+    if (e.key === 'ArrowDown') { if (list.hidden) update(); else move(1); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { move(-1); e.preventDefault(); }
+    else if (e.key === 'Enter' && !list.hidden && active >= 0 && rows[active]) { choose(rows[active]); e.preventDefault(); }
+    else if (e.key === 'Escape' && !list.hidden) {
+      if (browsing) closeList(); else close();
+      e.preventDefault();                            // a search input clears itself on Esc otherwise
+      e.stopPropagation();
     }
   });
   list.addEventListener('mousedown', (e) => {          // mousedown: fires before the input loses focus
     const li = e.target.closest('[data-i]');
-    if (li) { e.preventDefault(); choose(items[+li.dataset.i]); }
+    e.preventDefault();
+    if (li) choose(rows[+li.dataset.i]);
   });
   list.addEventListener('mousemove', (e) => {
     const li = e.target.closest('[data-i]');
@@ -332,7 +468,7 @@ export function setupSearch(input, list, deps, onChoose, onFocus) {
       input.setAttribute('aria-activedescendant', `search-opt-${active}`);
     }
   });
-  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) { browsing = null; close(); } }, 150));
   clear.addEventListener('click', () => {
     input.value = '';
     clear.hidden = true;

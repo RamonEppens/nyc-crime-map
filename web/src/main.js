@@ -793,9 +793,14 @@ async function main() {
   const pctBoro = await query(`SELECT pct, arg_max(boro, n) AS boro FROM
     (SELECT pct, boro, sum(n) AS n FROM agg_precinct WHERE pct > 0 GROUP BY 1, 2) GROUP BY 1 ORDER BY 1`);
   const places = [
-    ...[1, 3, 4, 2, 5].map((code) => ({ type: 'area', level: 'borough', code, boro: code, label: meta.boroughs[code], detail: 'Borough' })),
-    ...meta.ntas.map((n) => ({ type: 'area', level: 'nta', code: n.code, boro: n.boro, label: n.name, detail: `Neighborhood · ${meta.boroughs[n.boro]}` })),
-    ...pctBoro.map((p) => ({ type: 'area', level: 'precinct', code: p.pct, boro: p.boro, label: precinctName({ pct: p.pct }), detail: `Precinct · ${meta.boroughs[p.boro]}` })),
+    ...[1, 3, 4, 2, 5].map((code) => ({ type: 'area', level: 'borough', group: 'borough', code, boro: code, label: meta.boroughs[code], detail: 'Borough' })),
+    ...meta.ntas.map((n) => ({
+      type: 'area', level: 'nta', code: n.code, boro: n.boro, label: n.name, boroName: meta.boroughs[n.boro],
+      group: n.type === 'residential' ? 'nta' : n.type === 'park' ? 'park' : 'place',
+      detail: `${n.type === 'residential' ? 'Neighborhood' : n.type === 'park' ? 'Park' : 'Place'} · ${meta.boroughs[n.boro]}`,
+    })),
+    ...pctBoro.map((p) => ({ type: 'area', level: 'precinct', group: 'precinct', code: p.pct, boro: p.boro, boroName: meta.boroughs[p.boro],
+      label: precinctName({ pct: p.pct }), detail: `Precinct · ${meta.boroughs[p.boro]}` })),
   ];
   const searchDeps = {
     query, places,

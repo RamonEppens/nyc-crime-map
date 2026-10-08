@@ -138,7 +138,7 @@ for (const theme of ['dark', 'light']) {
   const searchFor = async (text) => {
     await page.fill('#search', text);
     await page.waitForFunction((t) => document.querySelector('#search-results').dataset.query === t, text.trim(), { timeout: 8000 });
-    return page.$$eval('#search-results li[data-i]', (els) => els.map((e) => e.innerText.replace(/\s+/g, ' ').trim()));
+    return page.$$eval('#search-results li[role="option"]', (els) => els.map((e) => e.innerText.replace(/\s+/g, ' ').trim()));
   };
   const openFirst = async () => {
     await page.keyboard.press('Enter');
@@ -155,8 +155,8 @@ for (const theme of ['dark', 'light']) {
     ['350 5th ave', /^350 5th Avenue Manhattan · Midtown South/, '350 5th Avenue', /within 200 m/i, 'address'],
     ['5th ave and w 42nd st', /^5th Avenue & West 42nd Street Corner · Manhattan/, '5th Avenue & West 42nd Street', /within 200 m/i, 'corner'],
     ['37-12 80th st', /^37-12 80th Street Queens · Jackson Heights/, '37-12 80th Street', /within 200 m/i, null],
-    ['broadway manhattan', /^Broadway Whole street · Manhattan/, 'Broadway', /per 100 m/, 'street'],
-    ['75th precinct', /^75th Precinct Precinct · Brooklyn/, '75th Precinct', /city rate per resident/, null],
+    ['broadway manhattan', /^Broadway Manhattan/, 'Broadway', /per 100 m/, 'street'],
+    ['75th precinct', /^75th Precinct Brooklyn/, '75th Precinct', /city rate per resident/, null],
   ];
   for (const [text, firstRe, title, figRe, shot] of cases) {
     const opts = await searchFor(text);
@@ -172,6 +172,18 @@ for (const theme of ['dark', 'light']) {
   if ((await searchFor('xyzzy')).length || !/No results/.test(await page.textContent('#search-results'))) {
     errors.push(`${theme}: nonsense should say there are no results`);
   }
+  // "See all": the empty box offers every list; the precincts list has all 78, by borough.
+  await page.fill('#search', '');
+  await page.waitForFunction(() => document.querySelector('#search-results').dataset.query === '');
+  await page.click('#search-results .search-all:has-text("See all 78")');
+  await page.waitForFunction(() => document.querySelector('#search-results').dataset.query === 'all:precinct');
+  const listed = await page.$$eval('#search-results li[role="option"]', (els) => els.length);
+  const subs = await page.$$eval('#search-results .search-sub', (els) => els.map((e) => e.textContent));
+  console.log(theme, 'all precincts:', listed - 1, '|', subs.join(', '));
+  if (listed - 1 !== 78 || subs.length !== 5) errors.push(`${theme}: "See all" precincts listed ${listed - 1} in ${subs.length} boroughs`);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.querySelector('#search-results').dataset.query === '');
+  await page.keyboard.press('Escape');
   await page.selectOption('#period-mode', 'month');
   await page.waitForTimeout(600);
   await searchFor('350 5th ave');
@@ -197,9 +209,9 @@ for (const theme of ['dark', 'light']) {
   if (empty.join() !== 'Manhattan,Brooklyn,Queens,Bronx,Staten Island') errors.push(`${theme}: empty box suggestions ${empty}`);
   await page.fill('#search', 'b');
   await page.waitForFunction(() => document.querySelector('#search-results').dataset.query === 'b', null, { timeout: 8000 });
-  const oneLetter = await page.$$eval('#search-results li[data-i]', (els) => els.map((e) => e.innerText.replace(/\s+/g, ' ')));
+  const oneLetter = await page.$$eval('#search-results li[role="option"]', (els) => els.map((e) => e.innerText.replace(/\s+/g, ' ')));
   console.log(theme, '"b" suggests:', oneLetter.join(' / '));
-  if (!/^(Bronx|Brooklyn) Borough/.test(oneLetter[0] ?? '') || !/^(Bronx|Brooklyn) Borough/.test(oneLetter[1] ?? '')) {
+  if (!/^(Bronx|Brooklyn)$/.test(oneLetter[0] ?? '') || !/^(Bronx|Brooklyn)$/.test(oneLetter[1] ?? '')) {
     errors.push(`${theme}: "b" should suggest the Bronx and Brooklyn first`);
   }
   await page.fill('#search', 'brook');
@@ -249,6 +261,7 @@ for (const theme of ['dark', 'light']) {
   await page.click('.stepper button:first-child');           // 2024: before the 116th Precinct
   await page.waitForTimeout(1200);
   await page.evaluate(() => window.__select.precinct(116));
+  await page.waitForFunction(() => /116th/.test(document.querySelector('.detail h2').textContent), null, { timeout: 8000 }).catch(() => {});
   await page.waitForTimeout(1500);
   const merged = (await page.textContent('.detail h2')).trim();
   console.log(theme, '2024, 116th ->', merged);

@@ -334,22 +334,41 @@ function render() {
     pickable: m >= 0.5 && k > 0.5,
     parameters: { depthCompare: 'always' },   // drawn over the sinking columns, never hidden by them
   });
+  // Selection: fluorescent green (the brand hue pushed to neon) with a soft glow underneath, so a
+  // street or a circle stands out over columns, dots and either basemap. A slightly deeper neon on
+  // the light basemap keeps it visible on white.
   const style = state.selectionStyle;
-  const outline = new GeoJsonLayer({
-    id: 'selection',
-    data: state.selection ? [state.selection] : [],
+  const neon = theme === 'dark' ? [57, 255, 136] : [0, 214, 104];
+  const width = style === 'line' ? 5 : 3;
+  const selData = state.selection ? [state.selection] : [];
+  const glow = new GeoJsonLayer({
+    id: 'selection-glow',
+    data: selData,
     stroked: true,
-    filled: style === 'area' || style === 'circle',
-    getFillColor: [66, 168, 114, style === 'circle' ? 38 : 26],   // brand green: selection is interface, not data
-    getLineColor: [66, 168, 114, 255],
+    filled: false,
+    getLineColor: [...neon, theme === 'dark' ? 70 : 60],
     lineWidthUnits: 'pixels',
-    getLineWidth: style === 'line' ? 5 : 2.5,
+    getLineWidth: width + 9,
     lineCapRounded: true,
     lineJointRounded: true,
     parameters: { depthCompare: 'always' },
-    updateTriggers: { getFillColor: style, getLineWidth: style },
+    updateTriggers: { getLineColor: theme, getLineWidth: style },
   });
-  overlay.setProps({ layers: [columns, points, ...precinctLayers(), outline] });
+  const outline = new GeoJsonLayer({
+    id: 'selection',
+    data: selData,
+    stroked: true,
+    filled: style === 'area' || style === 'circle',
+    getFillColor: [...neon, style === 'circle' ? 40 : 26],
+    getLineColor: [...neon, 255],
+    lineWidthUnits: 'pixels',
+    getLineWidth: width,
+    lineCapRounded: true,
+    lineJointRounded: true,
+    parameters: { depthCompare: 'always' },
+    updateTriggers: { getFillColor: [style, theme], getLineColor: theme, getLineWidth: style },
+  });
+  overlay.setProps({ layers: [columns, points, ...precinctLayers(), glow, outline] });
 }
 
 function precinctLayers() {
