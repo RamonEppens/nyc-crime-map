@@ -1,18 +1,22 @@
 // Map: MapLibre basemap + deck.gl overlay.
 //   Zoomed out: 3D hexagon columns on the project's own 180 m pointy-top grid (ColumnLayer).
 //   Zoomed in (12.5 -> 13.7): columns sink and fade while the complaint locations fade in.
+//   Precinct view: flat 2D map, each NYPD precinct filled by its number of complaints.
 import { Map, NavigationControl, AttributionControl, setWorkerUrl } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { MapboxOverlay } from '@deck.gl/mapbox';
-import { ColumnLayer, ScatterplotLayer } from '@deck.gl/layers';
+import { ColumnLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer, PathLayer, TextLayer } from '@deck.gl/layers';
 import { basemapStyle } from './basemap.js';
-import { RAMPS, GROUP_COLORS, rgb, classify, quantileBreaks } from './colors.js';
+import { RAMPS, PRECINCT_RAMPS, GROUP_COLORS, rgb, classify, quantileBreaks } from './colors.js';
 import { fmt } from './format.js';
+import { setGrid, hexCenter } from './geo.js';
 
 setWorkerUrl(workerUrl);
 
 const VIEW = { center: [-73.965, 40.715], zoom: 11, pitch: 45, bearing: -12 };   // Manhattan/Brooklyn
+const VIEW_2D = { center: [-73.94, 40.70], zoom: 10.1, pitch: 0, bearing: 0 };     // all five boroughs
+const VIEW_MS = 800;                // hexagons <-> precincts cross-fade and camera move
 const PAN_LIMITS = [[-74.6, 40.35], [-73.3, 41.05]];
 const MAX_HEIGHT_M = 2200;          // tallest column, meters (linear in n / max)
 const ZOOM_FADE = [12.5, 13.7];     // columns -> points transition
@@ -28,7 +32,12 @@ let hooks = {};
 // stable order. Filters only change the counts, never the array length or order, so deck.gl can
 // interpolate each column's height and color in place (attribute transitions work by index).
 const universe = { cells: [], index: new globalThis.Map() };
-const state = { hexes: [], maxN: 1, breaks: [], label: '', points: [], pointsBox: null };
+const state = { hexes: [], maxN: 1, breaks: [], label: '', points: [], pointsBox: null, selection: null,
+  view: 'hex', mix: 0, precinctBreaks: [] };
+// Precincts: features loaded once in a fixed order (79: 78 precincts + the merged 105/113/116 area
+// used for periods before the 116th existed). Polygons and outlines are flattened once, so color
+// changes interpolate in place like the hexagons; each filter only rewrites `units[i].n / shown`.
+const precincts = { units: [], polygons: [], paths: [], version: 0 };
 const key = (q, r) => q * 10000 + r;
 const easeOutCubic = (t) => 1 - (1 - t) ** 3;
 
@@ -37,20 +46,16 @@ const smoothstep = (a, b, x) => {
   return t * t * (3 - 2 * t);
 };
 
-/** Hexagon center (q, r) -> [lon, lat], with the grid parameters written by the pipeline. */
-function hexCenter(q, r) {
-  const cx = grid.side * Math.sqrt(3) * (q + r / 2);
-  const cy = grid.side * 1.5 * r;
-  return [grid.lon0 + cx / grid.kx, grid.lat0 + cy / grid.ky];
-}
-
 export async function createMap(container, opts) {
   ({ grid, theme, categories } = opts);
+  state.view = opts.view ?? 'hex';
+  state.mix = state.view === 'precincts' ? 1 : 0;
+  setGrid(grid);
   hooks = opts.hooks;
   map = new Map({
     container,
     style: basemapStyle(theme),
-    ...VIEW,
+    ...(state.view === 'precincts' ? VIEW_2D : VIEW),
     maxBounds: PAN_LIMITS,
     maxPitch: 70,
     attributionControl: false,
@@ -62,6 +67,18 @@ export async function createMap(container, opts) {
   map.addControl(overlay);
 
   map.on('zoom', render);                         // keeps the column/point transition smooth
+  // Clicks: a hexagon column or a location dot selects that hexagon; elsewhere, the neighborhood.
+  map.on('click', (e) => {
+    const picked = overlay.pickObject({ x: e.point.x, y: e.point.y, radius: 3, layerIds: ['hex', 'points', 'precincts'] });
+    const lngLat = [e.lngLat.lng, e.lngLat.lat];
+    if (picked?.layer.id === 'precincts') hooks.onPick?.({ kind: 'precinct', unit: precincts.units[picked.object.u].props });
+    else if (state.view === 'precincts') hooks.onPick?.({ kind: 'none' });
+    else if (picked?.layer.id === 'hex' && picked.object.n > 0) hooks.onPick?.({ kind: 'hex', q: picked.object.q, r: picked.object.r });
+    else if (picked?.layer.id === 'points') hooks.onPick?.({ kind: 'point', lngLat: [picked.object.lon, picked.object.lat] });
+    else hooks.onPick?.({ kind: 'ground', lngLat });
+  });
+  map.getCanvas().style.cursor = '';
+  if (state.view === 'precincts') lockFlat(true);
   map.on('moveend', () => {
     updateBreaks();
     render();
@@ -78,6 +95,77 @@ export function setTheme(next) {
   render();
 }
 
+/** Precinct boundaries (GeoJSON FeatureCollection). Call once. */
+export function setPrecinctShapes(geo) {
+  precincts.units = geo.features.map((f) => ({ props: f.properties, n: 0, shown: false }));
+  precincts.polygons = [];
+  precincts.paths = [];
+  geo.features.forEach((f, u) => {
+    const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    for (const rings of polys) {
+      precincts.polygons.push({ u, polygon: rings });
+      for (const ring of rings) precincts.paths.push({ u, path: ring });
+    }
+  });
+}
+
+/** counts: Map pct -> n for the current filters; merged: draw 105/113/116 as one area. */
+export function setPrecincts(counts, merged) {
+  for (const unit of precincts.units) {
+    const { pct, merged: parts } = unit.props;
+    if (parts) {
+      unit.shown = merged;
+      unit.n = parts.reduce((t, p) => t + (counts.get(p) ?? 0), 0);
+    } else {
+      const inMerged = precincts.units.some((x) => x.props.merged?.includes(pct));
+      unit.shown = !(merged && inMerged);
+      unit.n = counts.get(pct) ?? 0;
+    }
+  }
+  precincts.version++;
+  const breaks = quantileBreaks(precincts.units.filter((x) => x.shown).map((x) => x.n));
+  for (let i = 1; i < breaks.length; i++) if (breaks[i] <= breaks[i - 1]) breaks[i] = breaks[i - 1] + 1;
+  state.precinctBreaks = breaks;
+  if (state.view === 'precincts') hooks.onLegend?.(PRECINCT_RAMPS[theme], breaks, 'precinct');
+  render();
+}
+
+/** Unit shown for a precinct number right now (the merged area when it applies), or null. */
+export function precinctUnit(pct) {
+  return precincts.units.find((x) => x.shown && (x.props.pct === pct || x.props.merged?.includes(pct)))?.props ?? null;
+}
+
+/** 'hex' (3D hexagons) or 'precincts' (flat, by NYPD precinct): cross-fade and move the camera. */
+export function setView(view) {
+  if (view === state.view) return;
+  state.view = view;
+  const from = state.mix;
+  const to = view === 'precincts' ? 1 : 0;
+  const start = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / VIEW_MS);
+    const e = t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2;     // ease in-out cubic
+    state.mix = from + (to - from) * e;
+    render();
+    if (t < 1 && state.view === view) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+  if (view === 'precincts') {
+    lockFlat(true);
+    map.easeTo({ pitch: 0, bearing: 0, zoom: Math.min(map.getZoom(), 12), duration: VIEW_MS });
+  } else {
+    lockFlat(false);
+    map.easeTo({ pitch: VIEW.pitch, bearing: VIEW.bearing, duration: VIEW_MS });
+  }
+  updateBreaks();
+}
+
+/** The precinct view is a flat map: no tilting or rotating. */
+function lockFlat(flat) {
+  if (flat) { map.dragRotate.disable(); map.touchZoomRotate.disableRotation(); map.keyboard.disableRotation(); }
+  else { map.dragRotate.enable(); map.touchZoomRotate.enableRotation(); map.keyboard.enableRotation(); }
+}
+
 /** cells: [{q, r}] for every hexagon in the data, sorted by (q, r). Call once. */
 export function setUniverse(cells) {
   universe.cells = cells.map(({ q, r }) => {
@@ -90,7 +178,7 @@ export function setUniverse(cells) {
 /** rows: [{q, r, n}] for the current filters. Builds a NEW array over the whole universe:
  *  hexagons without complaints stay in it with n = 0 (transparent, height 0). */
 export function setHexagons(rows, label) {
-  const hexes = universe.cells.map((c) => ({ lon: c.lon, lat: c.lat, n: 0 }));
+  const hexes = universe.cells.map((c) => ({ q: c.q, r: c.r, lon: c.lon, lat: c.lat, n: 0 }));
   let max = 1;
   for (const { q, r, n } of rows) {
     const i = universe.index.get(key(q, r));
@@ -107,6 +195,18 @@ export function setHexagons(rows, label) {
   maybeLoadPoints();
 }
 
+/** Outline of the current selection (GeoJSON Feature) or null. */
+export function setSelection(feature) {
+  state.selection = feature;
+  render();
+}
+
+/** Move the camera to show a bounding box [[w, s], [e, n]] without changing pitch or bearing. */
+export function showBounds(bounds) {
+  map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 380, right: 60 }, maxZoom: 14,
+    pitch: map.getPitch(), bearing: map.getBearing(), duration: 900 });
+}
+
 /** For tests: size of the hexagon array, hexagons with data, and the array itself (identity). */
 export function hexStats() {
   return { length: state.hexes.length, withData: state.hexes.filter((d) => d.n > 0).length,
@@ -115,6 +215,10 @@ export function hexStats() {
 
 /** Quantile breaks over the hexagons currently in view; the legend is updated to match. */
 function updateBreaks() {
+  if (state.view === 'precincts') {                // precinct classes do not depend on the viewport
+    hooks.onLegend?.(PRECINCT_RAMPS[theme], state.precinctBreaks, 'precinct');
+    return;
+  }
   const b = map.getBounds();
   const withData = state.hexes.filter((d) => d.n > 0);
   const inView = withData.filter((d) => b.contains([d.lon, d.lat])).map((d) => d.n);
@@ -123,7 +227,7 @@ function updateBreaks() {
     if (breaks[i] <= breaks[i - 1]) breaks[i] = breaks[i - 1] + 1;
   }
   state.breaks = breaks;
-  hooks.onLegend?.(RAMPS[theme], state.breaks);
+  hooks.onLegend?.(RAMPS[theme], state.breaks, 'hexagon');
 }
 
 function viewBox(margin) {
@@ -134,7 +238,7 @@ function viewBox(margin) {
 }
 
 async function maybeLoadPoints() {
-  if (map.getZoom() < ZOOM_FADE[0] || !hooks.loadPoints) return;
+  if (state.view === 'precincts' || map.getZoom() < ZOOM_FADE[0] || !hooks.loadPoints) return;
   const box = viewBox(POINTS_MARGIN);
   const held = state.pointsBox;
   if (held && box[0] >= held[0] && box[1] >= held[1] && box[2] <= held[2] && box[3] <= held[3]) return;
@@ -150,6 +254,7 @@ function render() {
   if (!overlay) return;
   const m = smoothstep(ZOOM_FADE[0], ZOOM_FADE[1], map.getZoom());
   const ramp = RAMPS[theme].map(rgb);
+  const k = 1 - state.mix;                          // 1 = hexagon view, 0 = precinct view
   const columns = new ColumnLayer({
     id: 'hex',
     data: state.hexes,
@@ -160,12 +265,12 @@ function render() {
     coverage: 1,
     extruded: true,
     getElevation: (d) => (d.n / state.maxN) * MAX_HEIGHT_M,
-    elevationScale: (1 - m) ** 1.6,
+    elevationScale: (1 - m) ** 1.6 * k,
     getFillColor: (d) => (d.n > 0 ? [...ramp[classify(d.n, state.breaks)], 235] : [0, 0, 0, 0]),
-    opacity: 0.95 * (1 - m) ** 1.3,
+    opacity: 0.95 * (1 - m) ** 1.3 * k,
     material: { ambient: 0.6, diffuse: 0.5, shininess: 20, specularColor: [30, 30, 30] },
-    visible: m < 1,
-    pickable: m < 0.5,
+    visible: m < 1 && k > 0,
+    pickable: m < 0.5 && k > 0.5,
     autoHighlight: true,
     highlightColor: [255, 255, 255, 60],
     transitions: {
@@ -185,15 +290,88 @@ function render() {
     getLineColor: theme === 'dark' ? [14, 14, 14] : [255, 255, 255],
     lineWidthUnits: 'pixels',
     getLineWidth: 1,
-    opacity: 0.9 * m,
-    visible: m > 0,
-    pickable: m >= 0.5,
+    opacity: 0.9 * m * k,
+    visible: m > 0 && k > 0,
+    pickable: m >= 0.5 && k > 0.5,
     parameters: { depthCompare: 'always' },   // drawn over the sinking columns, never hidden by them
   });
-  overlay.setProps({ layers: [columns, points] });
+  const outline = new GeoJsonLayer({
+    id: 'selection',
+    data: state.selection ? [state.selection] : [],
+    stroked: true,
+    filled: false,
+    getLineColor: [66, 168, 114, 255],         // brand green: selection is interface, not data
+    lineWidthUnits: 'pixels',
+    getLineWidth: 2.5,
+    parameters: { depthCompare: 'always' },
+    updateTriggers: { getLineColor: theme },
+  });
+  overlay.setProps({ layers: [columns, points, ...precinctLayers(), outline] });
+}
+
+function precinctLayers() {
+  const mix = state.mix;
+  if (mix <= 0 || !precincts.units.length) return [];
+  const ramp = PRECINCT_RAMPS[theme].map(rgb);
+  const { units, version } = precincts;
+  const triggers = `${version}|${state.precinctBreaks.join(',')}|${theme}`;
+  const fills = new SolidPolygonLayer({
+    id: 'precincts',
+    data: precincts.polygons,
+    getPolygon: (d) => d.polygon,
+    getFillColor: (d) => (units[d.u].shown ? [...ramp[classify(units[d.u].n, state.precinctBreaks)], 225] : [0, 0, 0, 0]),
+    opacity: mix,
+    pickable: mix > 0.5,
+    autoHighlight: true,
+    highlightColor: [255, 255, 255, 50],
+    transitions: { getFillColor: { duration: 450 } },
+    updateTriggers: { getFillColor: triggers },
+  });
+  const borders = new PathLayer({
+    id: 'precinct-borders',
+    data: precincts.paths,
+    getPath: (d) => d.path,
+    getColor: (d) => (units[d.u].shown ? (theme === 'dark' ? [12, 12, 12, 255] : [255, 255, 255, 255]) : [0, 0, 0, 0]),
+    widthUnits: 'pixels',
+    getWidth: 1.2,
+    opacity: mix,
+    updateTriggers: { getColor: triggers },
+  });
+  const labels = new TextLayer({
+    id: 'precinct-labels',
+    data: units.filter((x) => x.shown),
+    getPosition: (d) => d.props.label,
+    getText: (d) => (d.props.merged ? d.props.merged.join('·') : String(d.props.pct)),
+    getSize: 11,
+    fontFamily: '"Public Sans", system-ui, sans-serif',
+    fontWeight: 600,
+    characterSet: '0123456789·',
+    fontSettings: { sdf: true },
+    outlineWidth: 2,
+    outlineColor: theme === 'dark' ? [12, 12, 12, 220] : [255, 255, 255, 220],
+    getColor: theme === 'dark' ? [235, 235, 235, 255] : [20, 30, 42, 255],
+    opacity: mix,
+    visible: map.getZoom() >= 10.3,
+    updateTriggers: { getText: version },
+  });
+  return [fills, borders, labels];
+}
+
+export const precinctName = (props) => (props.merged
+  ? `${props.merged.slice(0, -1).map(ordinal).join(', ')} and ${ordinal(props.merged.at(-1))} Precincts`
+  : `${ordinal(props.pct)} Precinct`);
+function ordinal(n) {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
 }
 
 function tooltip({ object, layer }) {
+  if (layer?.id === 'precincts' && object) {
+    const unit = precincts.units[object.u];
+    return { className: 'deck-tooltip',
+      html: `${precinctName(unit.props)}<br><strong>${fmt(unit.n)}</strong> complaint${unit.n === 1 ? '' : 's'} · ${state.label}` };
+  }
   if (!object || !object.n) return null;
   if (layer.id === 'hex') {
     return { className: 'deck-tooltip', html: `<strong>${fmt(object.n)}</strong> complaints<br>${state.label}` };

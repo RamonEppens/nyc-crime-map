@@ -7,6 +7,13 @@ export const RAMPS = {
   light: ['#cfe0f0', '#a8c8e6', '#7aa9d6', '#4a88c2', '#2470ad', '#154f80'],
 };
 
+// Precincts (flat 2D fills): same blue as the hexagons, so blue always means "more complaints",
+// but spread wider in lightness, because flat polygons get no shading to separate the classes.
+export const PRECINCT_RAMPS = {
+  dark: ['#173049', '#1e4466', '#265b86', '#2f73a6', '#4a90c4', '#79b2de'],
+  light: ['#dbe8f4', '#b1cde8', '#7fabd6', '#4a88c2', '#2468a5', '#123f69'],
+};
+
 // Points are colored by offense group (4 colors are distinguishable; 18 would not be).
 export const GROUP_COLORS = {
   person: '#d46c66',

@@ -29,7 +29,7 @@ for (const theme of ['dark', 'light']) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', (e) => errors.push(`${theme}: ${e.message}`));
   page.on('console', (m) => m.type() === 'error' && errors.push(`${theme} console: ${m.text()}`));
-  await page.goto(`${base}?db=${encodeURIComponent(sql)}&basemap=none&theme=${theme}`);
+  await page.goto(`${base}?db=${encodeURIComponent(sql)}&basemap=none&theme=${theme}&geosearch=${encodeURIComponent(sql)}`);
   await page.waitForSelector('body[data-ready="true"]', { timeout: 60000 });
   await settle(page);
   console.log(theme, '|', (await page.textContent('.status')).trim());
@@ -102,11 +102,121 @@ for (const theme of ['dark', 'light']) {
   await page.click('[data-block="legend"] .block-toggle');
   if (await page.isVisible('#legend-body')) errors.push(`${theme}: Hide did not hide the legend`);
   await page.click('[data-block="legend"] .block-toggle');
+  // Selection: click a hexagon on the map, follow the link to its neighborhood, go back.
+  await page.evaluate(() => window.__nycmap.jumpTo({ center: [-73.94, 40.80], zoom: 12, pitch: 0, bearing: 0 }));
+  await settle(page);
+  await page.mouse.click(304 + 388, 450);
+  await page.waitForTimeout(1200);
+  const hexTitle = (await page.textContent('.detail h2')).trim();
+  const hexFigs = (await page.textContent('.figures')).replace(/\s+/g, ' ').trim();
+  const ctx = (await page.textContent('.detail .context')).replace(/\s+/g, ' ').trim();
+  console.log(theme, 'clicked:', hexTitle, '|', ctx, '|', hexFigs);
+  if (hexTitle !== 'Hexagon') errors.push(`${theme}: map click did not select a hexagon (${hexTitle})`);
+  await page.screenshot({ path: `${out}/${theme}-hex-selected.png` });
+  await page.click('.detail .context [data-nta]');
+  await page.waitForTimeout(1500);
+  const ntaTitle = (await page.textContent('.detail h2')).trim();
+  console.log(theme, 'neighborhood:', ntaTitle, '|', (await page.textContent('.detail .context')).trim(), '|',
+    (await page.textContent('.figures')).replace(/\s+/g, ' ').trim(), '|', (await page.textContent('.figures-note')).trim());
+  await page.screenshot({ path: `${out}/${theme}-nta-selected.png` });
+  await page.click('.detail .back');
+  await page.waitForTimeout(800);
+  if ((await page.textContent('.detail h2')).trim() !== 'New York City') errors.push(`${theme}: back did not return to the city`);
+  // Search: an address (GeoSearch mock) opens the 200 m panel; a neighborhood name selects it.
+  await page.fill('#search', '350 5th');
+  await page.waitForSelector('#search-results li[data-i]', { timeout: 5000 });
+  const opts = await page.$$eval('#search-results li[data-i]', (els) => els.map((e) => e.textContent.trim()));
+  console.log(theme, 'search options:', opts.join(' / '));
+  if (opts.length !== 1) errors.push(`${theme}: duplicate GeoSearch results were not merged (${opts.length})`);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(2500);
+  await settle(page);
+  const addrTitle = (await page.textContent('.detail h2')).trim();
+  const addrFigs = (await page.textContent('.figures')).replace(/\s+/g, ' ').trim();
+  console.log(theme, 'address:', addrTitle, '|', (await page.textContent('.detail .context')).replace(/\s+/g, ' ').trim(), '|', addrFigs,
+    '|', (await page.textContent('.figures-note')).trim());
+  if (addrTitle !== '350 5th Avenue') errors.push(`${theme}: address title ${addrTitle}`);
+  if (!/within 200 m/.test(addrFigs)) errors.push(`${theme}: address figures missing "within 200 m"`);
+  await page.screenshot({ path: `${out}/${theme}-address.png` });
+  await page.keyboard.press('Escape');
+  await page.fill('#search', 'mott');
+  await page.waitForSelector('#search-results li[data-i]', { timeout: 5000 });
+  await page.click('#search-results li[data-i]:has-text("Mott")');
+  await page.waitForTimeout(2000);
+  const mott = (await page.textContent('.detail h2')).trim();
+  console.log(theme, 'neighborhood search:', mott);
+  if (!/Mott/.test(mott)) errors.push(`${theme}: neighborhood search selected ${mott}`);
+  await page.click('.detail .back');
+  await page.waitForTimeout(800);
+  if (await page.inputValue('#search')) errors.push(`${theme}: back did not clear the search box`);
+  // Suggestions: the empty box offers the five boroughs; one letter already suggests places.
+  await page.click('#search');
+  await page.waitForTimeout(200);
+  const empty = await page.$$eval('#search-results .opt-label', (els) => els.map((e) => e.textContent));
+  if (empty.join() !== 'Manhattan,Brooklyn,Queens,Bronx,Staten Island') errors.push(`${theme}: empty box suggestions ${empty}`);
+  await page.fill('#search', 'b');
+  await page.waitForTimeout(200);
+  const oneLetter = await page.$$eval('#search-results li[data-i]', (els) => els.map((e) => e.innerText.replace(/\s+/g, ' ')));
+  console.log(theme, '"b" suggests:', oneLetter.join(' / '));
+  if (!oneLetter.length || !oneLetter[0].startsWith('Brooklyn')) errors.push(`${theme}: "b" should suggest Brooklyn first`);
+  await page.fill('#search', 'brook');
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: `${out}/${theme}-suggestions.png` });
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(2500);
+  await settle(page);
+  const boro = (await page.textContent('.detail h2')).trim();
+  console.log(theme, 'borough:', boro, '|', (await page.textContent('.detail .context')).trim(), '|',
+    (await page.textContent('.figures')).replace(/\s+/g, ' ').trim(), '|', (await page.textContent('.figures-note')).trim());
+  if (boro !== 'Brooklyn') errors.push(`${theme}: Enter did not pick Brooklyn (${boro})`);
+  await page.screenshot({ path: `${out}/${theme}-borough.png` });
+  await page.click('.detail .back');
+  await page.waitForTimeout(800);
+  await page.evaluate(() => window.__nycmap.jumpTo({ center: [-73.965, 40.715], zoom: 11, pitch: 45, bearing: -12 }));
+  await settle(page);
+
   await page.selectOption('#period-mode', 'monthRange');
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${out}/${theme}-monthrange.png` });
   await page.selectOption('#period-mode', 'year');
   await page.waitForTimeout(800);
+
+  // Precinct view: flat, legend per precinct, a click selects a precinct, 105/113/116 merged before 2025.
+  await page.click('.view-switch [data-view="precincts"]');
+  await page.waitForTimeout(2500);
+  const flat = await page.evaluate(() => [window.__nycmap.getPitch(), window.__nycmap.getBearing()]);
+  const pTitle = await page.textContent('#legend-title');
+  console.log(theme, 'precinct view:', pTitle, '| pitch/bearing', flat.join('/'), '|', (await page.textContent('.legend-labels')).replace(/\s+/g, ' ').trim(),
+    '|', (await page.textContent('.status')).trim());
+  if (pTitle !== 'Complaints per precinct') errors.push(`${theme}: legend title ${pTitle}`);
+  if (Math.abs(flat[0]) > 0.5 || Math.abs(flat[1]) > 0.5) errors.push(`${theme}: precinct view is not flat (${flat})`);
+  await page.screenshot({ path: `${out}/${theme}-precincts.png` });
+  await page.evaluate(() => window.__select.precinct(75));
+  await page.waitForTimeout(1500);
+  const p75 = (await page.textContent('.detail h2')).trim();
+  console.log(theme, 'precinct:', p75, '|', (await page.textContent('.figures')).replace(/\s+/g, ' ').trim());
+  if (p75 !== '75th Precinct') errors.push(`${theme}: precinct selection ${p75}`);
+  await page.click('.detail .back');
+  await page.waitForTimeout(500);
+  await page.selectOption('#period-mode', 'month');
+  await page.waitForTimeout(500);
+  await page.click('.stepper button:last-child');           // stepping forward stays in the window
+  await page.waitForTimeout(500);
+  await page.selectOption('#period-mode', 'year');
+  await page.click('.stepper button:first-child');           // 2024: before the 116th Precinct
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => window.__select.precinct(116));
+  await page.waitForTimeout(1500);
+  const merged = (await page.textContent('.detail h2')).trim();
+  console.log(theme, '2024, 116th ->', merged);
+  if (merged !== '105th, 113th and 116th Precincts') errors.push(`${theme}: 2024 should merge 105/113/116 (${merged})`);
+  await page.click('.detail .back');
+  await page.click('.stepper button:last-child');
+  await page.waitForTimeout(800);
+  await page.click('.view-switch [data-view="hex"]');
+  await page.waitForTimeout(2500);
+  const tilt = await page.evaluate(() => window.__nycmap.getPitch());
+  if (Math.abs(tilt - 45) > 0.5 || (await page.textContent('#legend-title')) !== 'Complaints per hexagon') errors.push(`${theme}: back to hexagons failed (pitch ${tilt})`);
 
   for (const [zoom, pitch, name] of [[12, 0, 'z12-top'], [13, 0, 'z13-top'], [13, 45, 'z13-tilt'], [14.2, 45, 'z14-points']]) {
     await page.evaluate(([z, p]) => window.__nycmap.jumpTo({ center: [-73.99, 40.735], zoom: z, pitch: p, bearing: -12 }), [zoom, pitch]);

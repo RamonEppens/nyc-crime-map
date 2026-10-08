@@ -23,6 +23,15 @@
           </div>
         </header>
 
+        <div class="block search" role="search">
+          <label class="visually-hidden" for="search">Search an address, neighborhood or borough</label>
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/></svg>
+          <input id="search" type="search" placeholder="Address, neighborhood or borough" autocomplete="off" spellcheck="false"
+            role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="search-results" />
+          <button class="search-clear" type="button" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <ul id="search-results" role="listbox" aria-label="Search results" hidden></ul>
+        </div>
+
         <section class="block" data-block="period">
           <div class="block-head">
             <h2 id="period-title">Date range</h2>
@@ -52,14 +61,18 @@
       </div>
 
       <section class="block legend" data-block="legend">
+        <div class="view-switch" role="radiogroup" aria-label="Map view">
+          <button role="radio" data-view="hex">3D hexagons</button>
+          <button role="radio" data-view="precincts">Precincts</button>
+        </div>
         <div class="block-head">
-          <h2>Complaints per hexagon</h2>
+          <h2 id="legend-title">Complaints per hexagon</h2>
           <button class="block-toggle" aria-expanded="true" aria-controls="legend-body">Hide</button>
         </div>
         <div class="block-body" id="legend-body">
           <div class="legend-ramp" aria-hidden="true"></div>
           <div class="legend-labels"></div>
-          <p class="hint">Each color holds about a sixth of the hexagons in view.</p>
+          <p class="hint" id="legend-hint">Each color holds about a sixth of the hexagons in view.</p>
         </div>
       </section>
 
@@ -72,14 +85,17 @@
       <p class="status" aria-live="polite"><span>Loading data</span></p>
     </main>
 
-    <aside class="detail" aria-label="Summary">
+    <aside class="detail" aria-label="Summary" aria-live="polite">
+      <button class="back link" hidden>New York City</button>
       <h2>New York City</h2>
+      <p class="context" hidden></p>
       <p class="sub"></p>
       <div class="figures"></div>
+      <p class="figures-note"></p>
       <h3 class="section-title">By offense</h3>
       <div class="bars"></div>
       <button class="more" hidden></button>
-      <p class="note">Counts are complaints reported to the NYPD. They are not arrests or convictions, and they do not measure risk.</p>
+      <p class="note"></p>
       <p class="credit">Data: <a href="https://data.cityofnewyork.us/d/qgea-i56i" target="_blank" rel="noopener">NYC Open Data, NYPD Complaint Data Historic</a>. Independent project, not affiliated with the City of New York or the NYPD.</p>
     </aside>
   </div>

@@ -76,6 +76,27 @@ def simplify_geojson(src: Path, dst: Path, keep: list[str], key_fn=None) -> list
     return out
 
 
+# The 116th Precinct was created on 2024-12-19 from parts of the 105th and 113th and appears in the
+# data from 2025 (month index 108). Periods that include earlier months draw the three as one area,
+# so the map never shows an empty 116th next to a 105th and 113th that still hold its complaints.
+PRECINCT_SPLIT = {"merged": [105, 113, 116], "until_m": 108}
+
+
+def add_merged_precincts(path: Path) -> None:
+    fc = json.loads(path.read_text(encoding="utf-8"))
+    feats = [f for f in fc["features"] if "merged" not in f["properties"]]
+    parts = [shape(f["geometry"]).buffer(0) for f in feats if f["properties"]["pct"] in PRECINCT_SPLIT["merged"]]
+    assert len(parts) == len(PRECINCT_SPLIT["merged"]), "precinct boundaries changed: check PRECINCT_SPLIT"
+    geom = unary_union(parts).buffer(0.00002).buffer(-0.00002)        # closes slivers between the parts
+    feats.append({"type": "Feature", "properties": dict(PRECINCT_SPLIT),
+                  "geometry": round_coords(mapping(geom.simplify(SIMPLIFY_DEG, preserve_topology=True)))})
+    for f in feats:                                                   # where the precinct number is drawn
+        pt = shape(f["geometry"]).representative_point()
+        f["properties"]["label"] = [round(pt.x, COORD_DECIMALS), round(pt.y, COORD_DECIMALS)]
+    fc["features"] = feats
+    path.write_text(json.dumps(fc, separators=(",", ":")), encoding="utf-8")
+
+
 def round_coords(geom: dict) -> dict:
     def r(c):
         return [round(c[0], COORD_DECIMALS), round(c[1], COORD_DECIMALS)] if isinstance(c[0], float) else [r(x) for x in c]
@@ -85,8 +106,13 @@ def round_coords(geom: dict) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=ROOT)
+    ap.add_argument("--merge-precincts-only", action="store_true",
+                    help="only add the merged 105/113/116 area and label points to an existing data/web/precincts.geojson")
     args = ap.parse_args()
     clean, ref, out = (args.root / "data" / p for p in ("clean", "reference", "web"))
+    if args.merge_precincts_only:
+        add_merged_precincts(out / "precincts.geojson")
+        return
     out.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     P = lambda p: f"'{p.as_posix()}'"
@@ -170,6 +196,7 @@ def main() -> None:
                                             "name": p["ntaname"], "boro": int(p["borocode"])})
     simplify_geojson(ref / "precincts.geojson", out / "precincts.geojson", ["precinct"],
                      lambda p: {"pct": int(float(p["precinct"]))})
+    add_merged_precincts(out / "precincts.geojson")
     src = json.loads((ref / "nta2020.geojson").read_text(encoding="utf-8"))["features"]
     boros = []
     for b in range(1, 6):

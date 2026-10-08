@@ -34,6 +34,22 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    def do_GET(self):
+        # Minimal stand-in for NYC GeoSearch's /v2/autocomplete (tests run offline): one address.
+        if self.path.startswith("/v2/autocomplete"):
+            feature = {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-73.98566, 40.74844]},
+                       "properties": {"name": "350 5TH AVENUE", "borough": "Manhattan", "label": "350 5TH AVENUE, New York"}}
+            body = json.dumps({"type": "FeatureCollection", "features": [feature, feature]}).encode()
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self._cors()
+        self.end_headers()
+
     def do_POST(self):
         sql = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
         try:
