@@ -1,0 +1,19 @@
+category,label,group,sort
+homicide,Homicide,person,1
+sex_crimes,Rape & sex crimes,person,2
+robbery,Robbery,person,3
+felony_assault,Felony assault,person,4
+assault,Assault (misdemeanor),person,5
+harassment,Harassment,person,6
+other_person,Other crimes against persons,person,7
+burglary,Burglary,property,8
+grand_larceny,Grand larceny,property,9
+petit_larceny,Petit larceny,property,10
+vehicle_theft,Vehicle theft,property,11
+fraud,Fraud & forgery,property,12
+vandalism_arson,Vandalism & arson,property,13
+drugs,Drugs,enforcement,14
+weapons,Weapons,enforcement,15
+traffic,Traffic & impaired driving,enforcement,16
+public_order,Public order & administration,enforcement,17
+other,Other,other,18

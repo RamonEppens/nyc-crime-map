@@ -1,0 +1,74 @@
+ky_cd,category,description
+101,homicide,Murder & non-negligent manslaughter
+102,homicide,Homicide - negligent (vehicle)
+103,homicide,Homicide - negligent (other)
+104,sex_crimes,Rape
+116,sex_crimes,Sex crimes (felony)
+233,sex_crimes,Sex crimes (misdemeanor)
+105,robbery,Robbery
+106,felony_assault,Felony assault
+344,assault,Assault 3 & related
+578,harassment,Harassment 2
+361,harassment,Offenses against public order (mostly aggravated harassment 2)
+355,other_person,Offenses against the person (reckless endangerment etc.)
+124,other_person,Kidnapping & related
+120,other_person,Child abandonment / non-support
+345,other_person,Offenses related to children
+126,other_person,Miscellaneous penal law felony (mostly criminal contempt 1 / reckless endangerment 1)
+107,burglary,Burglary
+231,burglary,Burglar's tools
+109,grand_larceny,Grand larceny
+341,petit_larceny,Petit larceny
+230,petit_larceny,Jostling
+110,vehicle_theft,Grand larceny of motor vehicle
+342,vehicle_theft,Petit larceny of motor vehicle
+353,vehicle_theft,Unauthorized use of a vehicle
+112,fraud,Theft-fraud
+113,fraud,Forgery
+340,fraud,Frauds
+358,fraud,Offenses involving fraud
+238,fraud,Fraudulent accosting
+343,fraud,Other offenses related to theft (mostly theft of services)
+121,vandalism_arson,Criminal mischief (felony)
+351,vandalism_arson,Criminal mischief (misdemeanor)
+114,vandalism_arson,Arson
+117,drugs,Dangerous drugs (felony)
+235,drugs,Dangerous drugs (misdemeanor)
+250,drugs,Cannabis related offenses
+118,weapons,Dangerous weapons (felony)
+236,weapons,Dangerous weapons (misdemeanor)
+455,weapons,Unlawful possession of weapon on school grounds
+348,traffic,Vehicle and traffic laws
+347,traffic,Intoxicated & impaired driving
+119,traffic,Intoxicated / impaired driving (felony)
+881,traffic,Other traffic infraction
+359,public_order,Offenses against public administration
+352,public_order,Criminal trespass
+111,public_order,Possession of stolen property (felony)
+232,public_order,Possession of stolen property (misdemeanor)
+356,public_order,Prostitution & related
+115,public_order,Prostitution & related (felony)
+234,public_order,Prostitution & related
+350,public_order,Gambling
+122,public_order,Gambling (felony)
+571,public_order,Loitering / gambling
+346,public_order,Alcoholic beverage control law
+572,public_order,Disorderly conduct
+672,public_order,Loitering
+237,public_order,Escape 3
+360,public_order,Loitering for drug purposes
+363,public_order,Offenses against public safety
+125,other,Other state laws (felony)
+364,other,Other state laws (misdemeanor)
+677,other,Other state laws (violation)
+365,other,Administrative code (misdemeanor)
+675,other,Administrative code (violation)
+685,other,Administrative codes
+366,other,NYC health code (misdemeanor)
+676,other,NYC health code (violation)
+678,other,Miscellaneous penal law (violation)
+349,other,Disruption of a religious service
+354,other,Anticipatory offenses
+357,other,Fortune telling
+362,other,Offenses against marriage
+123,other,Abortion

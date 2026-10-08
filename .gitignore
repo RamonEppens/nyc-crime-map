@@ -1,0 +1,23 @@
+# Data (never committed; large files go to Cloudflare R2)
+data/
+*.parquet
+*.parquet.part
+
+# Private reference material (rules, prompt, logos)
+_private/
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Node / web
+node_modules/
+dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
