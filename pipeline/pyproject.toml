@@ -10,7 +10,6 @@ dependencies = [
     "shapely>=2.0",
     "numpy>=1.26",
     "xlrd>=2.0",
-    "h3>=4.0",
 ]
 
 [dependency-groups]

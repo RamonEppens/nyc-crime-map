@@ -60,5 +60,29 @@ Rules are implemented in `pipeline/scripts/03_clean.py`; decisions are logged in
 ## Demographics
 - Suspect/victim fields are excluded by design (decision #3). Suspect fields are 40–64% unknown anyway.
 
-## Known differences vs CompStat
-_TBD (validation step)._
+## Geography (`05_geography.py`)
+- Boundaries: 2020 NTAs (262, NYC Open Data 9nt8-h7nd) and police precincts (78, y76i-bdw7).
+  Boroughs = NTAs merged. Population: 2020 Census P1_001N by tract (Census API), summed to NTAs
+  via the 2020 tract file (63ge-mke6) → 8,804,190, the official total.
+- 183,135 drawable points: 183,063 fall inside an NTA, 68 are within ~50 m (assigned to the
+  nearest), 4 are outside (dropped from neighborhood stats). No point sits exactly on a boundary.
+- NYPD's precinct field matches the precinct polygon for 95.6% of complaints. Differences are
+  stable by year (~4.2–4.8%): mostly neighboring precincts along boundary streets, transit
+  complaints at stations (14% differ), and the 105th/113th → 116th split.
+- The 116th Precinct was created on 2024-12-19 from parts of the 105th and 113th; it appears in the
+  complaint data from 2025 (224 rows dated 2024). Precinct trends for 105/113/116 break at 2025.
+- Rule (#16): precinct statistics use NYPD's precinct field (what CompStat uses); neighborhood
+  statistics use the NTA polygon each point falls in (stable over time).
+- NTA types: parks, airports, cemeteries and Rikers have little or no population → no per-capita
+  rates there.
+
+## Validation vs CompStat (`06_validate.py`, `docs/validation/`)
+- Seven major felonies, 2016–2025. Citywide our totals are within +0.1% to +0.7% of NYPD's published
+  figures every year (each offense within ±2%); murders match exactly in 8 of 10 years.
+- Precinct-years: 96% within ±2%, 99% within ±5%.
+- Small positive gaps in older years are expected: CompStat freezes each year in January, the open
+  dataset reflects later corrections.
+- Found an error in NYPD's published precinct table: the 116th Precinct rows for 2016–2023 repeat
+  the 115th Precinct's figures. Excluded from scoring and documented.
+- Since 2014 CompStat reports complaints inside Department of Correction facilities as "DOC", not by
+  precinct; we compare them separately.

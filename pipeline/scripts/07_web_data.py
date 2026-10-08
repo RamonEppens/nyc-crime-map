@@ -5,7 +5,7 @@ Inputs:  data/clean/complaints.parquet, data/clean/point_geo.parquet, data/refer
 Outputs (data/web/):
   incidents.parquet     one row per complaint, compact codes, spatially sorted (Hilbert curve)
   points.parquet        complaints per snapped location x month x category
-  hex.parquet           complaints per H3 cell (res 9, with res-8 parent) x month x category
+  hex.parquet           complaints per hexagon (180 m pointy-top axial grid, q/r) x month x category
   agg_nta.parquet       complaints per NTA x month x category (drawable points only)
   agg_precinct.parquet  complaints per NYPD precinct x month x category x location type (all rows)
   nta.geojson, precincts.geojson, boroughs.geojson   simplified boundaries (~5 m tolerance)
@@ -25,11 +25,12 @@ import json
 from pathlib import Path
 
 import duckdb
-import h3
 import numpy as np
 import pyarrow as pa
 from shapely.geometry import mapping, shape
 from shapely.ops import unary_union
+
+from hexgrid import GRID, latlon_to_axial
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = Path(__file__).resolve().parents[1] / "config"
@@ -110,10 +111,10 @@ def main() -> None:
     pts = con.execute("SELECT lat, lon FROM g").fetchnumpy()
     lat, lon = pts["lat"], pts["lon"]
     hk = hilbert_key(lat, lon)
-    h9 = [h3.latlng_to_cell(a, b, 9) for a, b in zip(lat, lon)]
-    h8 = [h3.cell_to_parent(c, 8) for c in h9]
-    con.register("pk", pa.table({"lat": lat, "lon": lon, "hk": hk, "h9": h9, "h8": h8}))
-    con.execute("""CREATE TABLE gp AS SELECT g.*, pk.hk, pk.h9, pk.h8, coalesce(nta.code, -1)::SMALLINT AS nta_code
+    hq, hr = latlon_to_axial(lat, lon)
+    con.register("pk", pa.table({"lat": lat, "lon": lon, "hk": hk,
+                                 "q": hq.astype(np.int16), "r": hr.astype(np.int16)}))
+    con.execute("""CREATE TABLE gp AS SELECT g.*, pk.hk, pk.q, pk.r, coalesce(nta.code, -1)::SMALLINT AS nta_code
                    FROM g JOIN pk USING (lat, lon) LEFT JOIN nta USING (nta2020)""")
 
     # Incidents -------------------------------------------------------------
@@ -135,13 +136,13 @@ def main() -> None:
             coalesce(gp.nta_code, -1)::SMALLINT AS nta,
             coalesce(c.precinct, -1)::SMALLINT AS pct,
             coalesce(gp.borocode, {boro_case})::TINYINT AS boro,
-            gp.hk, gp.h8, gp.h9
+            gp.hk, gp.q, gp.r
         FROM c
         JOIN cat USING (category)
         LEFT JOIN prem USING (premise)
         LEFT JOIN gp ON c.lat = gp.lat AND c.lon = gp.lon
     """)
-    con.execute(f"""COPY (SELECT * EXCLUDE (hk, h8, h9) FROM inc ORDER BY hk NULLS LAST, pct, d)
+    con.execute(f"""COPY (SELECT * EXCLUDE (hk, q, r) FROM inc ORDER BY hk NULLS LAST, pct, d)
                     TO {P(out / 'incidents.parquet')} (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP})""")
 
     # Points / hex / aggregates ------------------------------------------
@@ -151,8 +152,8 @@ def main() -> None:
     con.execute(f"""COPY (SELECT * EXCLUDE (hk) FROM read_parquet({P(out / 'points_tmp.parquet')}))
                     TO {P(out / 'points.parquet')} (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP})""")
     (out / "points_tmp.parquet").unlink()
-    con.execute(f"""COPY (SELECT h8, h9, m, cat, count(*)::INTEGER AS n
-                          FROM inc WHERE lt = 0 GROUP BY ALL ORDER BY h8, h9, m, cat)
+    con.execute(f"""COPY (SELECT q, r, m, cat, count(*)::INTEGER AS n
+                          FROM inc WHERE lt = 0 GROUP BY ALL ORDER BY r, q, m, cat)
                     TO {P(out / 'hex.parquet')} (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE {ROW_GROUP})""")
     con.execute(f"""COPY (SELECT nta, m, cat, count(*)::INTEGER AS n FROM inc WHERE lt = 0 AND nta >= 0
                           GROUP BY ALL ORDER BY nta, m, cat)
@@ -189,6 +190,7 @@ def main() -> None:
                    "url": "https://data.cityofnewyork.us/d/qgea-i56i",
                    "rows_updated_at": clean_meta.get("rows_updated_at")},
         "window": {"first_month": "2016-01", "months": 120, "first_day": "2016-01-01"},
+        "grid": GRID,
         "categories": [{"code": i, "id": c["category"], "label": c["label"], "group": c["group"]}
                        for i, c in enumerate(cats)],
         "boroughs": {str(i): b.title() for b, i in BOROUGHS.items()},
@@ -220,8 +222,7 @@ def main() -> None:
     assert one(f"SELECT sum(n) FROM read_parquet({P(out / 'agg_precinct.parquet')})") == t["complaints"]
     assert len(nta_feats) == len(ntas)
     print(json.dumps({"totals": t, "files_mb": {k: round(v / 1e6, 2) for k, v in meta["files"].items()},
-                      "hex_cells_res9": one(f"SELECT count(DISTINCT h9) FROM read_parquet({P(out / 'hex.parquet')})"),
-                      "hex_cells_res8": one(f"SELECT count(DISTINCT h8) FROM read_parquet({P(out / 'hex.parquet')})")},
+                      "hexagons": one(f"SELECT count(*) FROM (SELECT DISTINCT q, r FROM read_parquet({P(out / 'hex.parquet')}))")},
                      indent=2))
 
 

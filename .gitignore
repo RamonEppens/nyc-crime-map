@@ -3,8 +3,16 @@ data/
 *.parquet
 *.parquet.part
 
-# Private reference material (rules, prompt, logos)
+# DuckDB spill files
+.tmp/
+*.tmp
+
+# Secrets (API keys)
+.env
+
+# Private reference material (rules, prompt, logos) and files shared in chat
 _private/
+Claude outputs/
 
 # Python
 .venv/
@@ -15,6 +23,8 @@ __pycache__/
 # Node / web
 node_modules/
 dist/
+web/public/duckdb-ext/
+web/tests/screens/
 
 # OS / editor
 .DS_Store

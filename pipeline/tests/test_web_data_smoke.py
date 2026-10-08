@@ -50,7 +50,8 @@ def test_pipeline_to_web(tmp_path: Path):
     assert q("SELECT count(*) FROM 'W/incidents.parquet' WHERE lt = 1 AND lat IS NOT NULL")[0] == 0
     assert q("SELECT min(m), max(m) FROM 'W/incidents.parquet'") == (9, 21)       # fake reports: Oct 2016 and Oct 2017
     assert q("SELECT sum(n) FROM 'W/hex.parquet'")[0] == t["drawable"]
-    assert q("SELECT count(DISTINCT length(h9)) FROM 'W/hex.parquet'")[0] == 1
+    assert q("SELECT count(*) FROM 'W/hex.parquet' WHERE q IS NULL OR r IS NULL")[0] == 0
+    assert meta["grid"]["side"] == 180 and meta["grid"]["orientation"] == "pointy"
     assert {f["properties"]["id"] for f in json.loads((web / "nta.geojson").read_text())["features"]} == {"MN0101", "BK0101"}
     assert len(json.loads((web / "boroughs.geojson").read_text())["features"]) == 2
     assert [c["id"] for c in meta["categories"]][:2] == ["homicide", "sex_crimes"]

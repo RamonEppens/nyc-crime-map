@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NYC Crime Map</title>
+  <meta name="description" content="Complaints reported to the NYPD from 2016 to 2025, mapped from NYC Open Data." />
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+</head>
+<body>
+  <div class="app">
+    <main class="map-wrap">
+      <div id="map" role="region" aria-label="Map of reported complaints"></div>
+
+      <!-- Left column: separate blocks floating over the map -->
+      <div class="controls" aria-label="Filters">
+        <header class="block brand">
+          <img src="logo.png" alt="" />
+          <div>
+            <h1>NYC Crime Map</h1>
+            <p>Complaints reported to the NYPD</p>
+          </div>
+        </header>
+
+        <section class="block" data-block="period">
+          <div class="block-head">
+            <h2 id="period-title">Date range</h2>
+            <button class="block-toggle" aria-expanded="true" aria-controls="period-body">Hide</button>
+          </div>
+          <div class="block-body" id="period-body">
+            <label class="visually-hidden" for="period-mode">How to choose the dates</label>
+            <div class="select-wrap"><select id="period-mode"></select></div>
+            <div class="period-inputs"></div>
+          </div>
+        </section>
+
+        <section class="block" data-block="offenses">
+          <div class="block-head">
+            <h2 id="offenses-title">Offense types</h2>
+            <button class="block-toggle" aria-expanded="true" aria-controls="offenses-body">Hide</button>
+          </div>
+          <div class="block-body flush" id="offenses-body">
+            <div class="cat-grid" role="group" aria-labelledby="offenses-title"></div>
+            <div class="block-foot">
+              <span class="hint">Enforcement offenses mostly reflect police activity.</span>
+              <span class="foot-actions"><button data-select="all">All</button><button data-select="none">None</button></span>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <section class="block legend" data-block="legend">
+        <div class="block-head">
+          <h2>Complaints per hexagon</h2>
+          <button class="block-toggle" aria-expanded="true" aria-controls="legend-body">Hide</button>
+        </div>
+        <div class="block-body" id="legend-body">
+          <div class="legend-ramp" aria-hidden="true"></div>
+          <div class="legend-labels"></div>
+          <p class="hint">Each color holds about a sixth of the hexagons in view.</p>
+        </div>
+      </section>
+
+      <div class="theme-switch" role="radiogroup" aria-label="Map style">
+        <button role="radio" data-value="dark"><span class="swatch night"></span>Night</button>
+        <button role="radio" data-value="light"><span class="swatch light"></span>Light</button>
+      </div>
+
+      <p class="status" aria-live="polite"><span>Loading data</span></p>
+    </main>
+
+    <aside class="detail" aria-label="Summary">
+      <h2>New York City</h2>
+      <p class="sub"></p>
+      <div class="figures"></div>
+      <h3 class="section-title">By offense</h3>
+      <div class="bars"></div>
+      <button class="more" hidden></button>
+      <p class="note">Counts are complaints reported to the NYPD. They are not arrests or convictions, and they do not measure risk.</p>
+      <p class="credit">Data: <a href="https://data.cityofnewyork.us/d/qgea-i56i" target="_blank" rel="noopener">NYC Open Data, NYPD Complaint Data Historic</a>. Independent project, not affiliated with the City of New York or the NYPD.</p>
+    </aside>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

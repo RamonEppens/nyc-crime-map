@@ -1,0 +1,81 @@
+offense,year,ours,compstat,diff_pct
+Murder,2016,335,335,0.0
+Murder,2017,292,292,0.0
+Murder,2018,295,295,0.0
+Murder,2019,319,319,0.0
+Murder,2020,468,468,0.0
+Murder,2021,486,488,-0.41
+Murder,2022,438,438,0.0
+Murder,2023,386,391,-1.28
+Murder,2024,382,382,0.0
+Murder,2025,309,309,0.0
+Rape,2016,1450,1438,0.83
+Rape,2017,1477,1449,1.93
+Rape,2018,1807,1794,0.72
+Rape,2019,1763,1755,0.46
+Rape,2020,1444,1427,1.19
+Rape,2021,1496,1491,0.34
+Rape,2022,1628,1617,0.68
+Rape,2023,1452,1455,-0.21
+Rape,2024,1749,1748,0.06
+Rape,2025,2049,2048,0.05
+Robbery,2016,15533,15500,0.21
+Robbery,2017,14000,13956,0.32
+Robbery,2018,12966,12913,0.41
+Robbery,2019,13452,13371,0.61
+Robbery,2020,13160,13106,0.41
+Robbery,2021,13871,13831,0.29
+Robbery,2022,17440,17411,0.17
+Robbery,2023,16905,16910,-0.03
+Robbery,2024,16574,16580,-0.04
+Robbery,2025,15092,15075,0.11
+Felony assault,2016,20923,20847,0.36
+Felony assault,2017,20185,20052,0.66
+Felony assault,2018,20385,20208,0.88
+Felony assault,2019,20898,20698,0.97
+Felony assault,2020,20779,20572,1.01
+Felony assault,2021,23066,22835,1.01
+Felony assault,2022,26201,26063,0.53
+Felony assault,2023,27845,27876,-0.11
+Felony assault,2024,29451,29461,-0.03
+Felony assault,2025,29841,29838,0.01
+Burglary,2016,13043,12990,0.41
+Burglary,2017,12151,12083,0.56
+Burglary,2018,11784,11687,0.83
+Burglary,2019,10919,10783,1.26
+Burglary,2020,15600,15478,0.79
+Burglary,2021,12883,12811,0.56
+Burglary,2022,15825,15746,0.5
+Burglary,2023,13757,13773,-0.12
+Burglary,2024,13067,13070,-0.02
+Burglary,2025,12826,12798,0.22
+Grand larceny,2016,44493,44279,0.48
+Grand larceny,2017,43384,43150,0.54
+Grand larceny,2018,43777,43558,0.5
+Grand larceny,2019,43533,43250,0.65
+Grand larceny,2020,35738,35505,0.66
+Grand larceny,2021,41197,40870,0.8
+Grand larceny,2022,51820,51565,0.49
+Grand larceny,2023,50514,50586,-0.14
+Grand larceny,2024,48445,48450,-0.01
+Grand larceny,2025,48107,48061,0.1
+Grand larceny of motor vehicle,2016,6319,6327,-0.13
+Grand larceny of motor vehicle,2017,5660,5676,-0.28
+Grand larceny of motor vehicle,2018,5426,5428,-0.04
+Grand larceny of motor vehicle,2019,5420,5430,-0.18
+Grand larceny of motor vehicle,2020,9055,9037,0.2
+Grand larceny of motor vehicle,2021,10409,10415,-0.06
+Grand larceny of motor vehicle,2022,13740,13749,-0.07
+Grand larceny of motor vehicle,2023,15797,15795,0.01
+Grand larceny of motor vehicle,2024,14193,14199,-0.04
+Grand larceny of motor vehicle,2025,13532,13523,0.07
+Total seven major felonies,2016,102096,101716,0.37
+Total seven major felonies,2017,97149,96658,0.51
+Total seven major felonies,2018,96440,95883,0.58
+Total seven major felonies,2019,96304,95606,0.73
+Total seven major felonies,2020,96244,95593,0.68
+Total seven major felonies,2021,103408,102741,0.65
+Total seven major felonies,2022,127092,126589,0.4
+Total seven major felonies,2023,126656,126786,-0.1
+Total seven major felonies,2024,123861,123890,-0.02
+Total seven major felonies,2025,121756,121652,0.09
