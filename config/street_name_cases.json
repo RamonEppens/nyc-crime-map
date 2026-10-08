@@ -1,0 +1,205 @@
+{
+ "_doc": "Shared test cases for street-name normalization (clave). Both pipeline/scripts/streetnames.py and web/src/streetnames.js must turn each input into exactly the expected key. Typed text and official names go through the same function.",
+ "cases": [
+  [
+   "WEST 42 STREET",
+   "WEST 42 STREET"
+  ],
+  [
+   "W 42nd St",
+   "WEST 42 STREET"
+  ],
+  [
+   "w. 42nd st.",
+   "WEST 42 STREET"
+  ],
+  [
+   "5 AVENUE",
+   "5 AVENUE"
+  ],
+  [
+   "5th Ave",
+   "5 AVENUE"
+  ],
+  [
+   "Fifth Avenue",
+   "5 AVENUE"
+  ],
+  [
+   "5th av",
+   "5 AVENUE"
+  ],
+  [
+   "1st Ave",
+   "1 AVENUE"
+  ],
+  [
+   "First Avenue",
+   "1 AVENUE"
+  ],
+  [
+   "Avenue of the Americas",
+   "AVENUE AMERICAS"
+  ],
+  [
+   "St Marks Pl",
+   "SAINT MARKS PLACE"
+  ],
+  [
+   "St. Mark's Place",
+   "SAINT MARKS PLACE"
+  ],
+  [
+   "Avenue S",
+   "AVENUE S"
+  ],
+  [
+   "E 7th St",
+   "EAST 7 STREET"
+  ],
+  [
+   "Frederick Douglass Blvd",
+   "FREDERICK DOUGLASS BOULEVARD"
+  ],
+  [
+   "Dr Martin Luther King Jr Blvd",
+   "DOCTOR MARTIN LUTHER KING JUNIOR BOULEVARD"
+  ],
+  [
+   "Ocean Pkwy",
+   "OCEAN PARKWAY"
+  ],
+  [
+   "Bruckner Expy",
+   "BRUCKNER EXPRESSWAY"
+  ],
+  [
+   "Riverside Dr",
+   "RIVERSIDE DRIVE"
+  ],
+  [
+   "Mt Eden Ave",
+   "MOUNT EDEN AVENUE"
+  ],
+  [
+   "Ft Hamilton Pkwy",
+   "FORT HAMILTON PARKWAY"
+  ],
+  [
+   "Broadway (Manhattan)",
+   "BROADWAY"
+  ],
+  [
+   "Beach 116 St",
+   "BEACH 116 STREET"
+  ],
+  [
+   "80th St",
+   "80 STREET"
+  ],
+  [
+   "Caf\u00e9 Lane",
+   "CAFE LANE"
+  ],
+  [
+   "Hylan Blvd",
+   "HYLAN BOULEVARD"
+  ],
+  [
+   "Grand Concourse",
+   "GRAND CONCOURSE"
+  ],
+  [
+   "Cross Bronx Expwy",
+   "CROSS BRONX EXPRESSWAY"
+  ],
+  [
+   "Union Tpke",
+   "UNION TURNPIKE"
+  ],
+  [
+   "Wall St",
+   "WALL STREET"
+  ],
+  [
+   "W  42 ST",
+   "WEST 42 STREET"
+  ],
+  [
+   "AVE OF THE AMERICAS",
+   "AVENUE AMERICAS"
+  ],
+  [
+   "ED KOCH QUEENSBORO BRG",
+   "ED KOCH QUEENSBORO BRIDGE"
+  ],
+  [
+   "LINCOLN TUNL",
+   "LINCOLN TUNNEL"
+  ],
+  [
+   "BEACH  116 ST",
+   "BEACH 116 STREET"
+  ],
+  [
+   "AVE S",
+   "AVENUE S"
+  ],
+  [
+   "MARTIN LUTHER KING JR PL",
+   "MARTIN LUTHER KING JUNIOR PLACE"
+  ],
+  [
+   "FRANKLIN D ROOSEVELT DR",
+   "FRANKLIN D ROOSEVELT DRIVE"
+  ],
+  [
+   "E  BROADWAY",
+   "EAST BROADWAY"
+  ],
+  [
+   "150-12 78 RD",
+   "150 12 78 ROAD"
+  ],
+  [
+   "PARK AVE S",
+   "PARK AVENUE SOUTH"
+  ],
+  [
+   "Park Avenue South",
+   "PARK AVENUE SOUTH"
+  ],
+  [
+   "CENTRAL PARK W",
+   "CENTRAL PARK WEST"
+  ],
+  [
+   "7 AVE S",
+   "7 AVENUE SOUTH"
+  ],
+  [
+   "AVE N",
+   "AVENUE N"
+  ],
+  [
+   "E  12 ST",
+   "EAST 12 STREET"
+  ],
+  [
+   "FDR DR VIADUCT",
+   "FDR DRIVE VIADUCT"
+  ],
+  [
+   "FDR BDWK",
+   "FDR BOARDWALK"
+  ],
+  [
+   "DR",
+   "DRIVE"
+  ],
+  [
+   "BCH 75 ST",
+   "BEACH 75 STREET"
+  ]
+ ]
+}

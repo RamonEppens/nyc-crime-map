@@ -18,7 +18,7 @@ PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8765
 base = duckdb.connect()
 for name in ("hex", "agg_precinct", "agg_nta"):
     base.execute(f"CREATE TABLE {name} AS SELECT * FROM read_parquet('{(DATA / f'{name}.parquet').as_posix()}')")
-for name in ("incidents", "points"):
+for name in ("incidents", "points", "street_segments", "street_corners", "street_blocks"):
     path = DATA / f"{name}.parquet"
     if path.exists():
         base.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{path.as_posix()}')")
@@ -31,22 +31,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self._cors()
-        self.end_headers()
-
-    def do_GET(self):
-        # Minimal stand-in for NYC GeoSearch's /v2/autocomplete (tests run offline): one address.
-        if self.path.startswith("/v2/autocomplete"):
-            feature = {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-73.98566, 40.74844]},
-                       "properties": {"name": "350 5TH AVENUE", "borough": "Manhattan", "label": "350 5TH AVENUE, New York"}}
-            body = json.dumps({"type": "FeatureCollection", "features": [feature, feature]}).encode()
-            self.send_response(200)
-            self._cors()
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        self.send_response(404)
         self._cors()
         self.end_headers()
 

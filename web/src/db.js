@@ -1,5 +1,5 @@
 // Data access. Every query in the app is plain DuckDB SQL against a few named views
-// (hex, agg_precinct, agg_nta, incidents, points). Two engines can answer it:
+// (hex, agg_precinct, agg_nta, incidents, points, street_*). Two engines can answer it:
 //   - DuckDB-WASM in the browser (normal use), reading Parquet over HTTP Range requests;
 //   - a small Python DuckDB server (automated tests): add ?db=http://localhost:8765 to the URL.
 // Both run the same SQL on the same files, so tests exercise the real queries.
@@ -14,7 +14,7 @@ export const DATA_URL = new URL(import.meta.env.VITE_DATA_URL || 'data/', docume
 
 // Small tables are copied into memory once; large ones stay remote and are read in pieces.
 const IN_MEMORY = ['hex', 'agg_precinct', 'agg_nta'];
-const REMOTE = ['incidents', 'points'];
+const REMOTE = ['incidents', 'points', 'street_segments', 'street_corners', 'street_blocks'];
 
 let run;
 
@@ -58,7 +58,10 @@ export async function initDb() {
     const table = await conn.query(sql);
     return table.toArray().map((row) => {
       const obj = row.toJSON();
-      for (const k in obj) if (typeof obj[k] === 'bigint') obj[k] = Number(obj[k]);
+      for (const k in obj) {
+        if (typeof obj[k] === 'bigint') obj[k] = Number(obj[k]);
+        else if (obj[k]?.toArray) obj[k] = Array.from(obj[k].toArray(), Number);   // LIST columns (street geometry)
+      }
       return obj;
     });
   };

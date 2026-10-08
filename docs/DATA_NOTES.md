@@ -86,3 +86,30 @@ Rules are implemented in `pipeline/scripts/03_clean.py`; decisions are logged in
   the 115th Precinct's figures. Excluded from scoring and documented.
 - Since 2014 CompStat reports complaints inside Department of Correction facilities as "DOC", not by
   precinct; we compare them separately.
+
+## Streets and search (`08_streets.py`)
+- Source: NYC Street Centerline (CSCL, `inkn-q76z`), 122,311 segments. Searchable: streets, highways,
+  bridges, tunnels, boardwalks, step streets and alleys (10,056 streets = name + borough); ramps,
+  paths, driveways and pedestrian overpasses are kept only as "absorbers" (a complaint on a park path
+  is not given to the avenue next to it). Ferry routes are dropped.
+- Names in CSCL are abbreviated with double spaces ("W  42 ST"). Display names are expanded
+  ("West 42nd Street"); search keys use one normalization shared by pipeline and browser.
+  Manhattan's 6th Avenue exists only as "AVE OF THE AMERICAS": aliases come from CSCL street codes
+  (b5sc) plus `config/street_aliases.csv` (6th Ave, FDR Drive, Lenox Ave, BQE, Triborough...).
+- House numbers: left/right ranges per segment; Queens hyphenated numbers (37-12) are encoded as
+  1,000,000 + 37 × 1000 + 12, so they never collide with plain numbers. Low numbers sit at the
+  segment's first vertex (checked: 350 5th Ave → between 33rd and 34th St; 1 Wall St → at Broadway;
+  37-12 80th St → at 37th Ave).
+- Corners: segment endpoints shared by two or more streets at the same level code (an expressway
+  over an avenue is not a corner): 49,861 intersections, 53,850 street pairs.
+- Assignment of mapped complaints: 98.7% get a street, 93.7% a house number; 15.2% sit at an
+  intersection and count for every street that meets there (decision #47).
+- Busiest block: number // 100 × 100, both sides together. Only station houses are excluded (they
+  are never on the map). Open question: some large fraud clusters (e.g. Coney Island, Melrose) may
+  be record locations rather than places; not proven, so not excluded.
+- Precinct population: 2020 Census blocks (`wmsu-5muw` + Census API P1_001N by block) assigned to
+  the precinct containing each block's representative point: 8,804,137 residents placed; the 53
+  missing from the 8,804,190 total live in blocks absent from the City's block map.
+- Comparison grid: 78,030 points every 100 m on land; for each, complaints within 200 m per offense
+  type and year → 101 percentiles (`compare.json`). Typical 2025 circle (all offenses): 36
+  complaints; 90th percentile 246. Typical street (≥ 300 m): 2.5 complaints per 100 m per year.

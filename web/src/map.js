@@ -2,7 +2,7 @@
 //   Zoomed out: 3D hexagon columns on the project's own 180 m pointy-top grid (ColumnLayer).
 //   Zoomed in (12.5 -> 13.7): columns sink and fade while the complaint locations fade in.
 //   Precinct view: flat 2D map, each NYPD precinct filled by its number of complaints.
-import { Map, NavigationControl, AttributionControl, setWorkerUrl } from 'maplibre-gl';
+import { Map, Marker, NavigationControl, AttributionControl, setWorkerUrl } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { MapboxOverlay } from '@deck.gl/mapbox';
@@ -206,14 +206,43 @@ export function setTint(group) {
 }
 
 /** Outline of the current selection (GeoJSON Feature) or null. */
-export function setSelection(feature) {
+/** What is selected, drawn in brand green over everything else (depthCompare: always):
+ *  style 'outline' (hexagon), 'area' (outline + light fill), 'circle' (200 m radius, light fill),
+ *  'line' (a whole street, 5 px with round ends). */
+export function setSelection(feature, style = 'outline') {
   state.selection = feature;
+  state.selectionStyle = style;
   render();
+}
+
+// Pin for an address or corner: a DOM marker, so it stays sharp and above the canvas.
+let pin;
+export function setPin(lngLat) {
+  if (!lngLat) { pin?.remove(); pin = null; return; }
+  if (!pin) {
+    const el = document.createElement('div');
+    el.className = 'map-pin';
+    el.setAttribute('aria-hidden', 'true');
+    pin = new Marker({ element: el, anchor: 'bottom' });
+  }
+  pin.setLngLat(lngLat).addTo(map);
+}
+
+const PADDING = { top: 60, bottom: 60, left: 380, right: 440 };   // keeps clear of the column and the panel
+/** Fly to a point (addresses, corners): close enough that the map shows complaint locations. */
+export function flyToPoint(lngLat, zoom = 15.8, duration = 1800) {
+  // An offset, not padding: MapLibre keeps a flyTo padding and adds it to the next fitBounds,
+  // which then cannot fit and silently does nothing.
+  map.flyTo({ center: lngLat, zoom, duration, offset: [(PADDING.left - PADDING.right) / 2, 0], essential: true });
+}
+/** Fit a box [[w, s], [e, n]] (streets, areas). */
+export function fitTo(bounds, { maxZoom = 15, duration = 1600 } = {}) {
+  map.fitBounds(bounds, { padding: PADDING, maxZoom, duration, pitch: map.getPitch(), bearing: map.getBearing() });
 }
 
 /** Move the camera to show a bounding box [[w, s], [e, n]] without changing pitch or bearing. */
 export function showBounds(bounds) {
-  map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 380, right: 440 }, maxZoom: 14,
+  map.fitBounds(bounds, { padding: PADDING, maxZoom: 14,
     pitch: map.getPitch(), bearing: map.getBearing(), duration: 900 });
 }
 
@@ -305,16 +334,20 @@ function render() {
     pickable: m >= 0.5 && k > 0.5,
     parameters: { depthCompare: 'always' },   // drawn over the sinking columns, never hidden by them
   });
+  const style = state.selectionStyle;
   const outline = new GeoJsonLayer({
     id: 'selection',
     data: state.selection ? [state.selection] : [],
     stroked: true,
-    filled: false,
-    getLineColor: [66, 168, 114, 255],         // brand green: selection is interface, not data
+    filled: style === 'area' || style === 'circle',
+    getFillColor: [66, 168, 114, style === 'circle' ? 38 : 26],   // brand green: selection is interface, not data
+    getLineColor: [66, 168, 114, 255],
     lineWidthUnits: 'pixels',
-    getLineWidth: 2.5,
+    getLineWidth: style === 'line' ? 5 : 2.5,
+    lineCapRounded: true,
+    lineJointRounded: true,
     parameters: { depthCompare: 'always' },
-    updateTriggers: { getLineColor: theme },
+    updateTriggers: { getFillColor: style, getLineWidth: style },
   });
   overlay.setProps({ layers: [columns, points, ...precinctLayers(), outline] });
 }

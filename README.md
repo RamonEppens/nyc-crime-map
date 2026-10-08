@@ -30,6 +30,8 @@ uv run scripts/04_reference.py
 uv run scripts/05_geography.py
 uv run scripts/06_validate.py
 uv run scripts/07_web_data.py
+uv run scripts/08_download_streets.py   # network: street centerline, census blocks
+uv run scripts/08_streets.py
 ```
 
 ## Data & credit

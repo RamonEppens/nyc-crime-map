@@ -29,7 +29,7 @@ for (const theme of ['dark', 'light']) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', (e) => errors.push(`${theme}: ${e.message}`));
   page.on('console', (m) => m.type() === 'error' && errors.push(`${theme} console: ${m.text()}`));
-  await page.goto(`${base}?db=${encodeURIComponent(sql)}&basemap=none&theme=${theme}&geosearch=${encodeURIComponent(sql)}`);
+  await page.goto(`${base}?db=${encodeURIComponent(sql)}&basemap=none&theme=${theme}`);
   await page.waitForSelector('body[data-ready="true"]', { timeout: 60000 });
   await settle(page);
   console.log(theme, '|', (await page.textContent('.brand .summary')).replace(/\s+/g, ' ').trim(), '|', await page.textContent('#summary-sub'));
@@ -134,25 +134,54 @@ for (const theme of ['dark', 'light']) {
   await page.click('.detail .close');
   await page.waitForTimeout(800);
   if (!(await page.isHidden('.detail'))) errors.push(`${theme}: close did not hide the panel`);
-  // Search: an address (GeoSearch mock) opens the 200 m panel; a neighborhood name selects it.
-  await page.fill('#search', '350 5th');
-  await page.waitForSelector('#search-results li[data-i]', { timeout: 5000 });
-  const opts = await page.$$eval('#search-results li[data-i]', (els) => els.map((e) => e.textContent.trim()));
-  console.log(theme, 'search options:', opts.join(' / '));
-  if (opts.length !== 1) errors.push(`${theme}: duplicate GeoSearch results were not merged (${opts.length})`);
-  await page.keyboard.press('Enter');
-  await page.waitForTimeout(2500);
-  await settle(page);
-  const addrTitle = (await page.textContent('.detail h2')).trim();
-  const addrFigs = (await page.textContent('.figures')).replace(/\s+/g, ' ').trim();
-  console.log(theme, 'address:', addrTitle, '|', (await page.textContent('.detail .context')).replace(/\s+/g, ' ').trim(), '|', addrFigs,
-    '|', (await page.textContent('.figures-note')).trim());
-  if (addrTitle !== '350 5th Avenue') errors.push(`${theme}: address title ${addrTitle}`);
-  if (!/within 200 m/i.test(addrFigs)) errors.push(`${theme}: address figures missing "within 200 m"`);
-  await page.screenshot({ path: `${out}/${theme}-address.png` });
+  // Search (our own street files): address, corner, whole street, precinct; each opens its panel.
+  const searchFor = async (text) => {
+    await page.fill('#search', text);
+    await page.waitForFunction((t) => document.querySelector('#search-results').dataset.query === t, text.trim(), { timeout: 8000 });
+    return page.$$eval('#search-results li[data-i]', (els) => els.map((e) => e.innerText.replace(/\s+/g, ' ').trim()));
+  };
+  const openFirst = async () => {
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(2600);
+    await settle(page);
+    return {
+      title: (await page.textContent('.detail h2')).trim(),
+      context: (await page.textContent('.detail .context')).replace(/\s+/g, ' ').trim(),
+      figs: (await page.textContent('.figures')).replace(/\s+/g, ' ').trim(),
+      note: (await page.textContent('.figures-note')).replace(/\s+/g, ' ').trim(),
+    };
+  };
+  const cases = [
+    ['350 5th ave', /^350 5th Avenue Manhattan · Midtown South/, '350 5th Avenue', /within 200 m/i, 'address'],
+    ['5th ave and w 42nd st', /^5th Avenue & West 42nd Street Corner · Manhattan/, '5th Avenue & West 42nd Street', /within 200 m/i, 'corner'],
+    ['37-12 80th st', /^37-12 80th Street Queens · Jackson Heights/, '37-12 80th Street', /within 200 m/i, null],
+    ['broadway manhattan', /^Broadway Whole street · Manhattan/, 'Broadway', /per 100 m/, 'street'],
+    ['75th precinct', /^75th Precinct Precinct · Brooklyn/, '75th Precinct', /city rate per resident/, null],
+  ];
+  for (const [text, firstRe, title, figRe, shot] of cases) {
+    const opts = await searchFor(text);
+    console.log(theme, JSON.stringify(text), '→', opts.slice(0, 3).join(' / '));
+    if (!firstRe.test(opts[0] ?? '')) { errors.push(`${theme}: "${text}" first result was "${opts[0]}"`); continue; }
+    const r = await openFirst();
+    console.log(theme, '   ', r.title, '|', r.context, '|', r.figs, '|', r.note);
+    if (r.title !== title) errors.push(`${theme}: "${text}" opened "${r.title}"`);
+    if (!figRe.test(r.figs)) errors.push(`${theme}: "${text}" figures missing ${figRe}`);
+    if (shot) await page.screenshot({ path: `${out}/${theme}-search-${shot}.png` });
+  }
+  if ((await searchFor('75'))[0]?.startsWith('75th Precinct') !== true) errors.push(`${theme}: "75" should suggest the 75th Precinct`);
+  if ((await searchFor('xyzzy')).length || !/No results/.test(await page.textContent('#search-results'))) {
+    errors.push(`${theme}: nonsense should say there are no results`);
+  }
+  await page.selectOption('#period-mode', 'month');
+  await page.waitForTimeout(600);
+  await searchFor('350 5th ave');
+  const monthly = await openFirst();
+  if (!/whole years/.test(monthly.figs)) errors.push(`${theme}: a single month should not be compared (${monthly.figs})`);
+  await page.selectOption('#period-mode', 'year');
+  await page.waitForTimeout(600);
   await page.keyboard.press('Escape');
   await page.fill('#search', 'mott');
-  await page.waitForSelector('#search-results li[data-i]', { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#search-results').dataset.query === 'mott', null, { timeout: 8000 });
   await page.click('#search-results li[data-i]:has-text("Mott")');
   await page.waitForTimeout(2000);
   const mott = (await page.textContent('.detail h2')).trim();
@@ -167,12 +196,14 @@ for (const theme of ['dark', 'light']) {
   const empty = await page.$$eval('#search-results .opt-label', (els) => els.map((e) => e.textContent));
   if (empty.join() !== 'Manhattan,Brooklyn,Queens,Bronx,Staten Island') errors.push(`${theme}: empty box suggestions ${empty}`);
   await page.fill('#search', 'b');
-  await page.waitForTimeout(200);
+  await page.waitForFunction(() => document.querySelector('#search-results').dataset.query === 'b', null, { timeout: 8000 });
   const oneLetter = await page.$$eval('#search-results li[data-i]', (els) => els.map((e) => e.innerText.replace(/\s+/g, ' ')));
   console.log(theme, '"b" suggests:', oneLetter.join(' / '));
-  if (!oneLetter.length || !oneLetter[0].startsWith('Brooklyn')) errors.push(`${theme}: "b" should suggest Brooklyn first`);
+  if (!/^(Bronx|Brooklyn) Borough/.test(oneLetter[0] ?? '') || !/^(Bronx|Brooklyn) Borough/.test(oneLetter[1] ?? '')) {
+    errors.push(`${theme}: "b" should suggest the Bronx and Brooklyn first`);
+  }
   await page.fill('#search', 'brook');
-  await page.waitForTimeout(800);
+  await page.waitForFunction(() => document.querySelector('#search-results').dataset.query === 'brook', null, { timeout: 8000 });
   await page.screenshot({ path: `${out}/${theme}-suggestions.png` });
   await page.keyboard.press('Enter');
   await page.waitForTimeout(2500);

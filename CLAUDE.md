@@ -41,6 +41,8 @@ uv run scripts/04_reference.py       # boundaries, population, NYPD CompStat tab
 uv run scripts/05_geography.py       # point -> NTA / precinct, nta.csv with population
 uv run scripts/06_validate.py        # compare with NYPD CompStat -> docs/validation/
 uv run scripts/07_web_data.py        # files the map loads -> data/web/
+uv run scripts/08_download_streets.py # network: CSCL centerline, 2020 census blocks + population
+uv run scripts/08_streets.py         # streets, corners, complaints per street, comparisons -> data/web/
 uv run pytest                        # tests
 
 cd web
@@ -65,6 +67,8 @@ python tests/sql_server.py & npm run test:smoke   # headless test with the real 
   search, Date range, Offense types, legend); 3D/Precincts and Night/Light pills bottom left; the
   details panel floats on the right only while something is selected (the total opens the city).
   Time logic lives in `src/period.js`.
+- Street names: one normalization, `pipeline/scripts/streetnames.py` = `web/src/streetnames.js`;
+  any change goes in both and in `config/street_name_cases.json` (tested on both sides).
 
 ## Data conventions
 - Raw snapshot keeps every column as text, untouched. All parsing/cleaning happens downstream

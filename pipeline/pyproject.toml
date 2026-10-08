@@ -9,6 +9,7 @@ dependencies = [
     "requests>=2.32",
     "shapely>=2.0",
     "numpy>=1.26",
+    "scipy>=1.11",
     "xlrd>=2.0",
 ]
 

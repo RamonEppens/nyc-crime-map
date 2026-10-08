@@ -4,9 +4,10 @@ import { initDb, query, loadJson } from './db.js';
 import {
   createMap, setTheme, setHexagons, setUniverse, hexStats, setSelection, showBounds,
   setView, setPrecinctShapes, setPrecincts, precinctUnit, precinctName, setTint,
+  setPin, flyToPoint, fitTo,
 } from './map.js';
 import { hexAt, hexCenter, hexPolygon, featureAt, meters, circlePolygon, bounds, degLat, degLon } from './geo.js';
-import { setupSearch } from './search.js';
+import { setupSearch, loadStreets, streetById } from './search.js';
 import { GROUP_COLORS, GROUP_LABELS } from './colors.js';
 import { fmt, fmtCompact, fmtChange, fmtShort } from './format.js';
 import {
@@ -213,9 +214,11 @@ function renderCity({ total, precinctOnly, previous, compare, days }) {
 }
 
 /** One figure tile: short label above, the number, and an optional small note below. */
-const fig = (label, value, note = '', small = false) => ({ label, value, note, small });
+const fig = (label, value, note = '', small = false, help = '') => ({ label, value, note, small, help });
+const helpMark = (text) => (text
+  ? ` <span class="q" tabindex="0" role="img" aria-label="${text.replace(/"/g, '&quot;')}" title="${text.replace(/"/g, '&quot;')}">?</span>` : '');
 function showFigures(figures, note = '') {
-  $('.figures').innerHTML = figures.map((f) => `<div class="figure"><div class="label">${f.label}</div>
+  $('.figures').innerHTML = figures.map((f) => `<div class="figure"><div class="label">${f.label}${helpMark(f.help)}</div>
     <div class="value${f.small ? ' small' : ''}">${f.value}</div>${f.note ? `<div class="fnote">${f.note}</div>` : ''}</div>`).join('');
   $('.figures-note').textContent = note;
 }
@@ -291,8 +294,9 @@ function renderHeader(title, context) {
 function selectNta(code, { move = false } = {}) {
   const feature = ntaGeo.features.find((f) => f.properties.code === code);
   state.selected = { kind: 'nta', code };
-  setSelection(feature);
-  if (move) showBounds(bounds(feature));
+  setSelection(feature, 'area');
+  setPin(null);
+  if (move) fitTo(bounds(feature), { maxZoom: 15, duration: 1600 });
   refresh();
 }
 // Borough outlines are only needed once someone picks a borough, so they load on demand.
@@ -302,8 +306,9 @@ async function selectBorough(code) {
   boroughGeo ??= await loadJson('boroughs.geojson');
   if (state.selected?.kind !== 'borough' || state.selected.code !== code) return;   // picked something else meanwhile
   const feature = boroughGeo.features.find((f) => f.properties.boro === code);
-  setSelection(feature);
-  showBounds(bounds(feature));
+  setSelection(feature, 'area');
+  setPin(null);
+  fitTo(bounds(feature), { maxZoom: 15, duration: 1600 });
   refresh();
 }
 const boroughPopulation = (code) => meta.ntas.filter((n) => n.boro === code).reduce((t, n) => t + n.population, 0);
@@ -316,23 +321,51 @@ async function ensurePrecincts() {
   setPrecinctShapes(precinctGeo);
 }
 const precinctMerged = () => Math.min(...monthsOf(state.period)) < SPLIT_MONTH;
-function selectPrecinct(props) {
+function selectPrecinct(props, { move = false } = {}) {
   state.selected = { kind: 'precinct', props };
-  setSelection(precinctGeo.features.find((f) => f.properties === props || (f.properties.pct === props.pct && !props.merged)));
+  const feature = precinctGeo.features.find((f) => f.properties === props || (f.properties.pct === props.pct && !props.merged));
+  setSelection(feature, 'area');
+  setPin(null);
+  if (move) fitTo(bounds(feature), { maxZoom: 15, duration: 1600 });
   refresh();
+}
+/** From search: a precinct number. Before 2025 the 105th, 113th and 116th are one area. */
+async function selectPrecinctNumber(pct) {
+  await ensurePrecincts();
+  const merged = precinctMerged() && precinctGeo.features.find((f) => f.properties.merged?.includes(pct));
+  const f = merged || precinctGeo.features.find((x) => x.properties.pct === pct);
+  if (f) selectPrecinct(f.properties, { move: true });
 }
 
 function selectHex(q, r) {
   state.selected = { kind: 'hex', q, r };
   setSelection(hexPolygon(q, r));
+  setPin(null);
   refresh();
 }
 const RADIUS_M = 200;
-function selectAddress(lngLat, label) {
-  state.selected = { kind: 'address', lngLat, label };
-  const circle = circlePolygon(lngLat, RADIUS_M);
-  setSelection(circle);
-  showBounds(bounds(circlePolygon(lngLat, RADIUS_M * 3)));
+/** An address or a corner: pin + 200 m circle, flown to closely enough to show locations. */
+function selectPoint(lngLat, label, corner = false) {
+  state.selected = { kind: 'point', lngLat, label, corner };
+  setSelection(circlePolygon(lngLat, RADIUS_M, 72), 'circle');
+  setPin(lngLat);
+  flyToPoint(lngLat);
+  refresh();
+}
+/** A whole street: all its segments as one line. */
+async function selectStreet(id) {
+  state.selected = { kind: 'street', id };
+  setPin(null);
+  const rows = await query(`SELECT xy FROM street_segments WHERE street = ${id}`);
+  if (state.selected?.kind !== 'street' || state.selected.id !== id) return;
+  const lines = rows.map((r) => {
+    const c = [];
+    for (let k = 0; k < r.xy.length; k += 2) c.push([r.xy[k] / 1e5, r.xy[k + 1] / 1e5]);
+    return c;
+  });
+  const feature = { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: lines } };
+  setSelection(feature, 'line');
+  fitTo(bounds(feature), { maxZoom: 15.5, duration: 1600 });
   refresh();
 }
 function selectCity() {
@@ -345,6 +378,7 @@ function clearSelection() {
   $('#search').value = '';
   $('.search-clear').hidden = true;
   setSelection(null);
+  setPin(null);
   refresh();
 }
 
@@ -356,6 +390,44 @@ function onPick(pick) {
   const f = featureAt(ntaGeo, pick.lngLat);
   return f ? selectNta(f.properties.code) : clearSelection();
 }
+
+// ---------- comparisons
+// Each kind of selection has its own denominator, so "Index 2×" always means "double the
+// typical", but typical is measured differently: points use a fixed area (200 m circle), streets
+// their length (per 100 m), areas their residents, hexagons the median hexagon.
+let cmp = null;                                  // compare.json (pipeline 08_streets.py)
+let cmpPromise = null;
+const loadCompare = () => (cmpPromise ??= loadJson('compare.json').then((c) => { cmp = c; return c; }));
+const RESIDENT_NOTE = 'Rate uses resident population: areas with few residents and many visitors (Midtown, for example) come out high.';
+
+/** The precomputed series to compare with, or the reason there is none: only all offense types
+ *  or exactly one, and whole years (one year, or a range compared as its yearly average). */
+function fairSeries() {
+  const all = state.cats.size === meta.categories.length;
+  const type = all ? 'all' : state.cats.size === 1 ? String([...state.cats][0]) : null;
+  const p = state.period;
+  let series = null; let years = 1;
+  if (p.mode === 'year') series = String(p.year);
+  else if (p.mode === 'yearRange') {
+    years = Math.abs(p.toYear - p.fromYear) + 1;
+    series = years === 1 ? String(Math.min(p.fromYear, p.toYear)) : 'avg';
+  }
+  if (!type) return { why: 'compared only for all offense types or exactly one' };
+  if (!series) return { why: 'compared only for whole years' };
+  return { type, series, years };
+}
+/** Share (0-100) of the compared set below x, from its 101 percentiles. */
+function shareBelow(P, x) {
+  let k = 0;
+  for (let i = 0; i <= 100; i++) if (P[i] < x) k = i;
+  return P[0] >= x ? 0 : Math.min(99, k);
+}
+const perYear = (days) => days / 365.25;
+const fmtIndex = (x) => `${x < 10 ? x.toFixed(1) : Math.round(x)}×`;
+const blockLabel = (b) => (b >= 1_000_000
+  ? `${Math.floor((b - 1_000_000) / 1000)}-00 to ${Math.floor((b - 1_000_000) / 1000)}-99`
+  : `${b}–${b + 99}`);
+const fmtLength = (m) => (m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.round(m / 10) * 10} m`);
 
 async function renderSelection(ticket) {
   const sel = state.selected;
@@ -382,14 +454,20 @@ async function renderSelection(ticket) {
       .map((x) => (counts.get(x.code) ?? 0) / x.population);
     const rate = total / Math.max(1, info.population);
     renderHeader(info.name, `<button class="link" data-boro="${info.boro}">${meta.boroughs[info.boro]}</button> · neighborhood (2020 NTA) · ${info.population ? `${fmt(info.population)} residents` : 'no resident population'}`);
+    const years = perYear(daysOf(monthsOf(state.period)));
+    const per100k = (r) => fmt((r * 100000) / years);
     showFigures([
       fig('Complaints', fmt(total)),
-      residential ? fig('Index', `${(rate / cityRate).toFixed(1)}×`, 'the city rate per resident') : fig('Index', 'n/a', 'few or no residents'),
+      residential ? fig('Index', fmtIndex(rate / cityRate), 'the city rate per resident', false,
+        `Complaints per resident ÷ the city rate. ${per100k(rate)} per 100,000 residents per year (city: ${per100k(cityRate)}).`)
+        : fig('Index', 'n/a', 'few or no residents'),
       fig('Most frequent', top(byCat), '', true),
-      residential ? fig('Percentile', ordinal(percentileOf(rates, rate)), 'among neighborhoods, per resident') : fig('Percentile', 'n/a', 'not ranked'),
+      residential ? fig('Percentile', ordinal(percentileOf(rates, rate)), 'among neighborhoods, per resident', false,
+        'Share of residential neighborhoods (1,000+ residents) with a lower rate per resident.')
+        : fig('Percentile', 'n/a', 'not ranked'),
     ], changeNote(total, prev[0]?.n ?? 0, compare));
     renderBars(byCat);
-    $('.detail .note').textContent = 'Neighborhood counts include only complaints with a map location. Rape, sex crimes and others NYPD places at station houses are counted citywide and by precinct.';
+    $('.detail .note').textContent = `${RESIDENT_NOTE} Neighborhood counts include only complaints with a map location; rape and sex crimes are counted by precinct.`;
   } else if (sel.kind === 'borough') {
     // Boroughs use NYPD's precinct field, so they count every complaint, including those NYPD
     // places only at the station house (rape, sex crimes).
@@ -403,15 +481,22 @@ async function renderSelection(ticket) {
     const population = boroughPopulation(sel.code);
     const rate = total / population;
     const cityRate = (city[0]?.n ?? 0) / meta.totals.population_2020;
-    renderHeader(meta.boroughs[sel.code], `Borough · ${fmt(population)} residents (2020 Census)`);
+    const byBoro = await query(`SELECT boro, sum(n)::INTEGER AS n FROM agg_precinct WHERE boro BETWEEN 1 AND 5 AND ${where()} GROUP BY 1`);
+    if (ticket !== pending) return;
+    const boroRates = byBoro.map((r) => r.n / boroughPopulation(r.boro));
+    const rank = 1 + boroRates.filter((r) => r > rate).length;
+    const years = perYear(daysOf(monthsOf(state.period)));
+    renderHeader(meta.boroughs[sel.code], `Borough · New York City · ${fmt(population)} residents (2020 Census)`);
     showFigures([
       fig('Complaints', fmt(total)),
-      fig('Per 1,000 residents', fmt(rate * 1000)),
-      cityRate ? fig('Index', `${(rate / cityRate).toFixed(1)}×`, 'the city rate per resident') : fig('Index', 'n/a'),
+      cityRate ? fig('Index', fmtIndex(rate / cityRate), 'the city rate per resident', false,
+        `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents per year (city: ${fmt((cityRate * 100000) / years)}).`)
+        : fig('Index', 'n/a'),
       fig('Most frequent', top(byCat), '', true),
+      fig('Rank', ordinal(rank), 'of 5 boroughs, per resident', false, 'Position among the five boroughs by complaints per resident (1st = highest).'),
     ], changeNote(total, prev[0]?.n ?? 0, compare));
     renderBars(byCat);
-    $('.detail .note').textContent = 'Borough counts include every complaint, also rape and sex crimes, which NYPD places only at the precinct station house.';
+    $('.detail .note').textContent = `${RESIDENT_NOTE} Borough counts include every complaint, also rape and sex crimes, which NYPD places at the precinct station house.`;
   } else if (sel.kind === 'precinct') {
     // NYPD's precinct field: every complaint counts, including those placed at the station house.
     const pcts = sel.props.merged ?? [sel.props.pct];
@@ -432,18 +517,34 @@ async function renderSelection(ticket) {
       const k = unit.merged ? 'merged' : unit.pct;
       units.set(k, (units.get(k) ?? 0) + n);
     }
-    const rank = 1 + [...units.values()].filter((n) => n > total).length;
-    renderHeader(precinctName(sel.props), `${meta.boroughs[boro[0]?.boro] ?? 'New York City'} · NYPD precinct${sel.props.merged ? 's, shown together: the 116th was created from the 105th and 113th in December 2024' : ''}`);
+    await loadCompare();
+    if (ticket !== pending) return;
+    const popOf = (k) => (k === 'merged' ? [105, 113, 116].reduce((t, p) => t + (cmp.precinct_population[p] ?? 0), 0)
+      : cmp.precinct_population[k] ?? 0);
+    const population = pcts.reduce((t, p) => t + (cmp.precinct_population[p] ?? 0), 0);
+    const cityRate = sum(all) / meta.totals.population_2020;
+    const rate = total / Math.max(1, population);
+    const rates = [...units].filter(([k]) => popOf(k) >= 1000).map(([k, n]) => n / popOf(k));
+    const ranked = population >= 1000;
+    const years = perYear(daysOf(monthsOf(state.period)));
+    renderHeader(precinctName(sel.props), `NYPD precinct${sel.props.merged ? 's' : ''} · ${meta.boroughs[boro[0]?.boro] ?? 'New York City'} · ${fmt(population)} residents (2020 Census)`
+      + (sel.props.merged ? '<br>Shown together: the 116th was created from the 105th and 113th in December 2024.' : ''));
     showFigures([
       fig('Complaints', fmt(total)),
-      fig('Per day', fmt(total / daysOf(monthsOf(state.period)))),
-      fig('Rank', ordinal(rank), `of ${units.size} precincts, by complaints`),
+      ranked ? fig('Index', fmtIndex(rate / cityRate), 'the city rate per resident', false,
+        `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents per year (city: ${fmt((cityRate * 100000) / years)}).`)
+        : fig('Index', 'n/a', 'few or no residents'),
       fig('Most frequent', top(byCat), '', true),
+      ranked ? fig('Percentile', ordinal(percentileOf(rates, rate)), `among ${units.size} precincts, per resident`, false,
+        'Share of precincts with a lower rate of complaints per resident.')
+        : fig('Percentile', 'n/a', 'not ranked'),
     ], changeNote(total, prev[0]?.n ?? 0, compare));
     renderBars(byCat);
-    $('.detail .note').textContent = 'Precinct counts use NYPD\'s precinct field and include every complaint, also rape and sex crimes. Precincts differ a lot in size, population and visitors, so compare them with care.';
-  } else if (sel.kind === 'address') {
-    await renderAddress(sel, ticket, compare, top, sum);
+    $('.detail .note').textContent = `${RESIDENT_NOTE} Precinct counts use NYPD's precinct field and include every complaint, also rape and sex crimes. Population: 2020 Census blocks inside the precinct.`;
+  } else if (sel.kind === 'point') {
+    await renderPoint(sel, ticket, compare, top, sum);
+  } else if (sel.kind === 'street') {
+    await renderStreet(sel, ticket, compare, top, sum);
   } else {
     const { q, r } = sel;
     const [byCat, prev, all] = await Promise.all([
@@ -470,56 +571,92 @@ async function renderSelection(ticket) {
   }
 }
 
-/**
- * Address: complaints within 200 m, compared with every 200 m area of its neighborhood
- * (circles centered every 100 m inside the neighborhood), like the Buenos Aires map.
- */
-async function renderAddress(sel, ticket, compare, top, sum) {
+/** Address or corner: complaints within 200 m, compared with 200 m circles every 100 m over
+ *  all of NYC (compare.json). */
+async function renderPoint(sel, ticket, compare, top, sum) {
   const [lon, lat] = sel.lngLat;
-  const nta = featureAt(ntaGeo, sel.lngLat);
   const box = (m) => `lat BETWEEN ${lat - degLat(m)} AND ${lat + degLat(m)} AND lon BETWEEN ${lon - degLon(m)} AND ${lon + degLon(m)}`;
   const near = (rows) => rows.filter((p) => meters(sel.lngLat, [p.lon, p.lat]) <= RADIUS_M);
-  const code = nta?.properties.code;
-  const [byLocCat, prevLoc, ntaLocs] = await Promise.all([
+  const [byLocCat, prevLoc] = await Promise.all([
     query(`SELECT lat, lon, cat, sum(n)::INTEGER AS n FROM points WHERE ${box(RADIUS_M)} AND ${where()} GROUP BY ALL`),
     compare ? query(`SELECT lat, lon, sum(n)::INTEGER AS n FROM points WHERE ${box(RADIUS_M)} AND ${where(compare.months)} GROUP BY ALL`) : [],
-    code !== undefined
-      ? query(`SELECT lat, lon, sum(n)::INTEGER AS n FROM points WHERE nta = ${code} AND ${where()} GROUP BY ALL`)
-      : [],
+    loadCompare(),
   ]);
   if (ticket !== pending) return;
-  const inside = near(byLocCat);
   const byCatMap = new Map();
-  for (const p of inside) byCatMap.set(p.cat, (byCatMap.get(p.cat) ?? 0) + p.n);
+  for (const p of near(byLocCat)) byCatMap.set(p.cat, (byCatMap.get(p.cat) ?? 0) + p.n);
   const byCat = [...byCatMap].map(([cat, n]) => ({ cat, n }));
   const total = sum(byCat);
   const previous = compare ? sum(near(prevLoc)) : null;
-
-  // Distribution of 200 m areas across the neighborhood.
-  let areas = [];
-  if (nta) {
-    const [[w, s], [e, n]] = bounds(nta);
-    for (let y = s; y <= n; y += degLat(100)) {
-      for (let x = w; x <= e; x += degLon(100)) {
-        if (!featureAt({ features: [nta] }, [x, y])) continue;
-        let c = 0;
-        for (const p of ntaLocs) if (meters([x, y], [p.lon, p.lat]) <= RADIUS_M) c += p.n;
-        areas.push(c);
-      }
-    }
+  const fair = fairSeries();
+  let index = fig('Index', '—', fair.why, false, 'Complaints within 200 m ÷ the median 200 m circle in NYC.');
+  let pctl = fig('Percentile', '—', fair.why, false, 'Share of NYC 200 m circles with fewer complaints.');
+  if (!fair.why) {
+    const P = cmp.point[fair.type][fair.series];
+    const x = total / fair.years;
+    const circles = fmt(cmp.grid_points);
+    index = P[50] > 0
+      ? fig('Index', fmtIndex(x / P[50]), 'the typical 200 m circle in NYC', false,
+        `Complaints within 200 m ÷ the median of ${circles} circles of 200 m centered every 100 m on land, same offense types and ${fair.series === 'avg' ? 'yearly average' : 'year'} (median: ${fmt(P[50])}).`)
+      : fig('Index', 'n/a', 'the typical circle has none');
+    pctl = fig('Percentile', ordinal(shareBelow(P, x)), 'among 200 m circles in NYC', false,
+      `Share of the ${circles} 200 m circles across NYC with fewer complaints.`);
   }
-  areas.sort((a, b) => a - b);
-  const median = areas.length ? areas[Math.floor(areas.length / 2)] : 0;
-  const ntaName = nta?.properties.name;
-  renderHeader(sel.label, `Within ${RADIUS_M}&nbsp;m, about 2 blocks${ntaName ? ` · in <button class="link" data-nta="${code}">${ntaName}</button>` : ''}`);
+  const nta = featureAt(ntaGeo, sel.lngLat);
+  renderHeader(sel.label, `${sel.corner ? 'Corner' : 'Address'} · ${nta ? `<button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>` : 'New York City'} · ${RADIUS_M}&nbsp;m radius`);
   showFigures([
     fig(`Within ${RADIUS_M}&nbsp;m`, fmt(total), 'complaints'),
-    median ? fig('Index', `${(total / median).toFixed(1)}×`, `the typical ${RADIUS_M}&nbsp;m area in ${ntaName}`) : fig('Index', 'n/a'),
+    index,
     fig('Most frequent', top(byCat), '', true),
-    areas.length ? fig('Percentile', ordinal(percentileOf(areas, total)), `among ${fmt(areas.length)} areas in this neighborhood`) : fig('Percentile', 'n/a', 'not ranked'),
+    pctl,
   ], changeNote(total, previous, compare));
   renderBars(byCat);
-  $('.detail .note').textContent = 'Counts only complaints with a map location; NYPD places them at the nearest intersection or mid-block. Rape and sex crimes are never placed on the map.';
+  $('.detail .note').textContent = 'Counts complaints NYPD placed within 200 m (about 2 blocks); NYPD places them at the nearest intersection or mid-block, and never places rape and sex crimes on the map. Addresses are located from the City\'s street centerline house-number ranges.';
+}
+
+/** Whole street: complaints within 30 m of its centerline, as a rate per 100 m of street. */
+async function renderStreet(sel, ticket, compare, top, sum) {
+  const s = streetById(sel.id);
+  const [byCat, prev, busiest] = await Promise.all([
+    query(`SELECT cat, sum(n)::INTEGER AS n FROM street_blocks WHERE street = ${sel.id} AND ${where()} GROUP BY 1`),
+    compare ? query(`SELECT sum(n)::INTEGER AS n FROM street_blocks WHERE street = ${sel.id} AND ${where(compare.months)}`) : [{ n: 0 }],
+    query(`SELECT block, sum(n)::INTEGER AS n FROM street_blocks WHERE street = ${sel.id} AND block >= 0 AND ${where()}
+           GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 1`),
+    loadCompare(),
+  ]);
+  if (ticket !== pending) return;
+  const total = sum(byCat);
+  const months = new Set(monthsOf(state.period));
+  let cityN = 0;
+  for (const [m, c, n] of cmp.street_city.m_cat_n) if (months.has(m) && state.cats.has(c)) cityN += n;
+  const rate = (total / s.length) * 100;
+  const cityRate = (cityN / cmp.street_city.length_m) * 100;
+  const short = s.length < cmp.short_street_m;
+  const fair = fairSeries();
+  const rateText = (r) => (r >= 10 ? fmt(r) : r.toFixed(1));
+  let pctl;
+  if (short) pctl = fig('Percentile', '—', 'streets under 300 m are not ranked');
+  else if (fair.why) pctl = fig('Percentile', '—', fair.why);
+  else {
+    const P = cmp.street[fair.type][fair.series];
+    pctl = fig('Percentile', ordinal(shareBelow(P, rate / fair.years)), 'among NYC streets, per 100 m', false,
+      'Share of NYC streets 300 m or longer with a lower rate of complaints per 100 m.');
+  }
+  const ntas = s.nNtas > 3 ? `${s.nNtas} neighborhoods` : s.ntas.map((c) => meta.ntas[c]?.name).filter(Boolean).join(', ');
+  renderHeader(s.name, `Whole street · ${fmtLength(s.length)} · ${meta.boroughs[s.boro]}${ntas ? ` · ${ntas}` : ''}`);
+  const notes = [changeNote(total, prev[0]?.n ?? 0, compare)];
+  if (busiest[0]?.n) notes.push(`Busiest block: numbers ${blockLabel(busiest[0].block)} (${fmt(busiest[0].n)})`);
+  showFigures([
+    fig('Complaints', fmt(total), `${rateText(rate)} per 100 m`),
+    cityRate > 0 ? fig('Index', fmtIndex(rate / cityRate), 'the NYC street average per 100 m', false,
+      `Complaints per 100 m of this street ÷ all complaints on NYC streets per 100 m of street (${rateText(cityRate)}).`)
+      : fig('Index', 'n/a'),
+    fig('Most frequent', top(byCat), '', true),
+    pctl,
+  ], notes.filter(Boolean).join('\n'));
+  renderBars(byCat);
+  $('.detail .note').textContent = 'Complaints within 30 m of the street centerline; at an intersection they count for every street that meets there, also in the NYC average.'
+    + (short || total < 20 ? ' This street is short or has few complaints, so each case moves the numbers a lot.' : '');
 }
 
 // The map takes an offense group's color when every selected type belongs to that group
@@ -653,15 +790,27 @@ async function main() {
   $('.detail .close').onclick = clearSelection;
   $('#city-total').onclick = () => (state.selected?.kind === 'city' ? clearSelection() : selectCity());
   $('.detail .updated').textContent = updatedLabel();
+  const pctBoro = await query(`SELECT pct, arg_max(boro, n) AS boro FROM
+    (SELECT pct, boro, sum(n) AS n FROM agg_precinct WHERE pct > 0 GROUP BY 1, 2) GROUP BY 1 ORDER BY 1`);
   const places = [
-    ...[1, 3, 4, 2, 5].map((code) => ({ kind: 'borough', code, label: meta.boroughs[code], detail: 'Borough' })),
-    ...meta.ntas.map((n) => ({ kind: 'nta', code: n.code, label: n.name, detail: `Neighborhood · ${meta.boroughs[n.boro]}` })),
+    ...[1, 3, 4, 2, 5].map((code) => ({ type: 'area', level: 'borough', code, boro: code, label: meta.boroughs[code], detail: 'Borough' })),
+    ...meta.ntas.map((n) => ({ type: 'area', level: 'nta', code: n.code, boro: n.boro, label: n.name, detail: `Neighborhood · ${meta.boroughs[n.boro]}` })),
+    ...pctBoro.map((p) => ({ type: 'area', level: 'precinct', code: p.pct, boro: p.boro, label: precinctName({ pct: p.pct }), detail: `Precinct · ${meta.boroughs[p.boro]}` })),
   ];
-  setupSearch($('#search'), $('#search-results'), places, (choice) => {
-    if (choice.kind === 'borough') return selectBorough(choice.code);
-    if (choice.kind === 'nta') return selectNta(choice.code, { move: true });
-    return selectAddress(choice.lngLat, choice.label);
-  });
+  const searchDeps = {
+    query, places,
+    ready: () => loadStreets(loadJson),
+    ntaName: (code) => meta.ntas[code]?.name,
+    ntaAt: (lngLat) => featureAt(ntaGeo, lngLat)?.properties.name,
+    boroName: (code) => meta.boroughs[code],
+  };
+  setupSearch($('#search'), $('#search-results'), searchDeps, (it) => {
+    if (it.type === 'point') return selectPoint(it.lngLat, it.label, it.kind === 'corner');
+    if (it.type === 'street') return selectStreet(it.id);
+    if (it.level === 'borough') return selectBorough(it.code);
+    if (it.level === 'precinct') return selectPrecinctNumber(it.code);
+    return selectNta(it.code, { move: true });
+  }, () => { loadStreets(loadJson); loadCompare(); });
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.selected) clearSelection(); });
   state.cats = new Set(meta.categories.map((c) => c.code));
   const [cells, drawn] = await Promise.all([
@@ -688,7 +837,7 @@ async function main() {
   if (params.has('db')) {                        // test mode only: hooks for headless tests
     window.__nycmap = map;
     window.__hexStats = hexStats;
-    window.__select = { city: selectCity, precinct: (pct) => selectPrecinct(precinctUnit(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, address: selectAddress, clear: clearSelection };
+    window.__select = { city: selectCity, precinct: (pct) => selectPrecinct(precinctUnit(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, point: selectPoint, street: selectStreet, clear: clearSelection };
   }
   await refresh();
 }
