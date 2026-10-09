@@ -4,11 +4,12 @@ import { initDb, query, loadJson } from './db.js';
 import {
   createMap, setTheme, setHexagons, setUniverse, hexStats, setSelection, showBounds,
   setView, setPrecinctShapes, setPrecincts, precinctUnit, precinctName, setTint,
-  setPin, flyToPoint, fitTo,
+  setPin, flyToPoint, fitTo, setHighlight, followTo, followEnd,
 } from './map.js';
 import { hexAt, hexCenter, hexPolygon, featureAt, meters, circlePolygon, bounds, degLat, degLon } from './geo.js';
 import { setupSearch, loadStreets, streetById } from './search.js';
-import { GROUP_COLORS, GROUP_LABELS } from './colors.js';
+import { GROUP_COLORS, GROUP_LABELS, GROUP_RAMPS } from './colors.js';
+import { buildReport } from './report.js';
 import { fmt, fmtCompact, fmtChange, fmtShort } from './format.js';
 import {
   MODES, MONTH_NAMES, FIRST_YEAR, LAST_YEAR, N_MONTHS, defaultPeriod, monthsOf, monthSql, labelOf,
@@ -25,6 +26,8 @@ const state = {
   selected: null,                               // null (city) | {kind:'borough'|'nta', code} | {kind:'hex', q, r} | {kind:'address', lngLat, label} | {kind:'precinct', props}
   showAllBars: false,
   view: 'hex',                                  // 'hex' (3D hexagons) | 'precincts' (flat, by NYPD precinct)
+  panelView: 'details',                         // details panel: 'details' | 'charts'
+  wide: false,                                  // details panel expanded
 };
 const SPLIT_MONTH = 108;                        // 2025-01: first month with the 116th Precinct (see pipeline)
 let meta;
@@ -49,7 +52,7 @@ const periodLabel = () => labelOf(state.period);
 function setupBlocks() {
   for (const btn of document.querySelectorAll('.block-toggle')) {
     const body = document.getElementById(btn.getAttribute('aria-controls'));
-    const block = btn.closest('.block').dataset.block;
+    const block = btn.closest('[data-block]').dataset.block;
     const key = `block:${block}`;
     const persist = block !== 'detail';           // the details panel opens expanded every time
     const apply = (open) => {
@@ -151,20 +154,22 @@ function renderPeriod() {
 function renderCategories() {
   const grid = $('.cat-grid');
   grid.innerHTML = '';
+  const total = meta.categories.length;
+  $('#offenses-count').textContent = state.cats.size === total ? `all ${total}` : `${state.cats.size} of ${total}`;
   for (const g of Object.keys(GROUP_LABELS)) {
-    const head = document.createElement('div');
-    head.className = 'cat-group';
-    head.textContent = GROUP_LABELS[g];
-    if (g === 'enforcement') head.insertAdjacentHTML('beforeend', ' <span class="group-note">· mostly reflect police activity</span>');
-    grid.append(head);
-    meta.categories.filter((c) => c.group === g).forEach((c, i) => {
+    const group = document.createElement('div');
+    group.className = 'cat-group';
+    group.style.setProperty('--g', GROUP_COLORS[g]);
+    group.innerHTML = `<h3 class="cat-group-title">${GROUP_LABELS[g]}${g === 'enforcement' ? ' <span class="group-note">(mostly reflect police activity)</span>' : ''}</h3><div class="chips"></div>`;
+    const chips = group.querySelector('.chips');
+    for (const c of meta.categories.filter((x) => x.group === g)) {
       const cell = document.createElement('div');
       cell.className = 'cat';
-      if (i % 2 === 0) cell.style.borderRight = '1px solid var(--line)';
       const on = state.cats.has(c.code);
-      const tip = state.notMapped.has(c.code) ? `${c.label}: location withheld by NYPD, counted in totals but not drawn` : c.label;
+      const hidden = state.notMapped.has(c.code);
+      const tip = hidden ? `${c.label}: location withheld by NYPD, counted in totals but not drawn` : c.label;
       cell.innerHTML = `<button class="cat-toggle" data-code="${c.code}" aria-pressed="${on}" title="${tip}">
-          <span class="dot" style="background:${GROUP_COLORS[g]}"></span><span class="name">${c.label}</span>${state.notMapped.has(c.code) ? '<span class="mark" aria-hidden="true">†</span>' : ''}</button>
+          <span class="dot" aria-hidden="true"></span><span class="name">${c.label}</span>${hidden ? '<span class="mark" aria-hidden="true">†</span>' : ''}</button>
         <button class="cat-only" aria-label="Show only ${c.label}">only</button>`;
       cell.querySelector('.cat-toggle').onclick = () => {
         state.cats.has(c.code) ? state.cats.delete(c.code) : state.cats.add(c.code);
@@ -175,8 +180,9 @@ function renderCategories() {
         state.cats = new Set([c.code]);
         renderCategories(); refresh();
       };
-      grid.append(cell);
-    });
+      chips.append(cell);
+    }
+    grid.append(group);
   }
 }
 function setupCategoryActions() {
@@ -192,7 +198,7 @@ function setupCategoryActions() {
 function renderLegend(ramp, breaks, unit = 'hexagon') {
   $('#legend-title').textContent = `Complaints per ${unit}`;
   $('#legend-hint').textContent = unit === 'precinct'
-    ? 'A sixth of the precincts per color · incl. sex crimes'
+    ? 'A sixth of the precincts per color, sex crimes included'
     : 'Each color holds about a sixth of the hexagons in view';
   $('.legend-ramp').innerHTML = ramp.map((c) => `<span style="background:${c}"></span>`).join('');
   // Each break sits on the boundary between two colors (k / 6 of the width).
@@ -247,13 +253,9 @@ function renderBars(rows) {
     .sort((a, b) => b.n - a.n);
   const shown = state.showAllBars ? items : items.slice(0, 8);
   const max = Math.max(1, ...items.map((i) => i.n));
-  $('.bars').innerHTML = shown.map(({ label, n }) => {
-    const w = (n / max) * 100;
-    const outside = w < 22;
-    return `<div class="bar"><span class="name">${label}</span>
-      <div class="track"><div class="fill${outside ? ' outside' : ''}" style="width:${w}%;--w:${w}%">
-      <span>${fmtCompact(n)}</span></div></div></div>`;
-  }).join('');
+  const color = chartColor();
+  $('.bars').innerHTML = shown.map(({ label, n }) => `<div class="bar"><span class="name">${label}</span><span class="num">${fmt(n)}</span>
+      <span class="track"><span class="fill" style="width:${Math.max(0.6, (n / max) * 100)}%;background:${color}"></span></span></div>`).join('');
   const more = $('.more');
   more.hidden = items.length <= 8;
   more.textContent = state.showAllBars ? 'Show fewer' : `Show all ${items.length}`;
@@ -264,7 +266,7 @@ function renderBars(rows) {
 // what part of it the current view cannot draw.
 function renderSummary({ total, precinctOnly, none, noPrecinct }) {
   $('#city-total').textContent = `${fmt(total)} complaints`;
-  $('#summary-filter').textContent = `· ${filterLabel()}`;
+  $('#summary-filter').textContent = filterLabel();
   $('#summary-sub').textContent = state.view === 'precincts'
     ? (noPrecinct ? `${fmt(noPrecinct)} without a precinct` : 'All drawn by precinct')
     : `${fmt(precinctOnly + none)} not on the map (location withheld)`;
@@ -276,7 +278,7 @@ const updatedLabel = () => new Date(meta.source.rows_updated_at).toLocaleDateStr
 const filterLabel = () => {
   const n = state.cats.size;
   const all = meta.categories.length;
-  return `${periodLabel()} · ${n === all ? 'all offenses' : `${n} of ${all} offense types`}`;
+  return `${periodLabel()}, ${n === all ? 'all offenses' : `${n} of ${all} offense types`}`;
 };
 
 function renderHeader(title, context) {
@@ -352,11 +354,107 @@ function selectPoint(lngLat, label, corner = false) {
   flyToPoint(lngLat);
   refresh();
 }
+// ---------- block highlight (hovering a block in a chart lights it on the map)
+// A block is street + hundred of the house number (thousand for Queens hyphen numbers, which
+// are stored as 1,000,000 + a·1000 + b). Its geometry is the street's segments whose midpoint
+// number falls inside the block, so a segment that only touches the block edge doesn't count.
+const segCache = new Map();
+const cornerCache = new Map();
+function streetSegments(id) {
+  if (!segCache.has(id)) {
+    segCache.set(id, query(`SELECT lf, lt, rf, rt, xy FROM street_segments WHERE street = ${id}`).then((rows) => rows.map((r) => {
+      const left = r.lf > 0 || r.lt > 0;
+      const a = left ? r.lf : r.rf, b = left ? r.lt : r.rt;
+      const c = [];
+      for (let k = 0; k < r.xy.length; k += 2) c.push([r.xy[k], r.xy[k + 1]]);
+      return { lo: Math.min(a, b), hi: Math.max(a, b), xy: c };
+    }).filter((g) => g.hi > 0)));
+  }
+  return segCache.get(id);
+}
+function streetCorners(id) {
+  if (!cornerCache.has(id)) {
+    cornerCache.set(id, query(`SELECT a, b, x, y FROM street_corners WHERE a = ${id} OR b = ${id}`)
+      .then((rows) => rows.map((r) => ({ other: r.a === id ? r.b : r.a, x: r.x, y: r.y }))));
+  }
+  return cornerCache.get(id);
+}
+async function blockSegments(street, block) {
+  const span = block >= 1_000_000 ? 1000 : 100;
+  const segs = await streetSegments(street);
+  return segs.filter((g) => { const mid = (g.lo + g.hi) / 2; return mid >= block && mid < block + span; })
+    .sort((a, b) => a.lo - b.lo);
+}
+/** The cross street meeting this street at a node, if any (corners are snapped, so allow ~5 m). */
+function crossAt(corners, [x, y], street) {
+  let best = null, bestD = 36;
+  for (const c of corners) {
+    const d = (c.x - x) ** 2 + (c.y - y) ** 2;
+    if (d <= bestD && c.other !== street) { best = c; bestD = d; }
+  }
+  return best && streetById(best.other)?.name;
+}
+/** Sentence for the tooltip: "between X and Y" or "at X" (null when neither end is a corner). */
+async function blockBetween(street, block, segs) {
+  if (!segs.length) return null;
+  const corners = await streetCorners(street);
+  // The block's two ends: the low end of its lowest-numbered segment and the high end of its
+  // highest. Segments are drawn in either direction, so try both ends and keep the outermost.
+  const ends = (g) => [g.xy[0], g.xy[g.xy.length - 1]];
+  const first = segs[0], last = segs[segs.length - 1];
+  const names = [];
+  for (const g of first === last ? [first] : [first, last]) {
+    for (const p of ends(g)) {
+      const n = crossAt(corners, p, street);
+      if (n && !names.includes(n)) names.push(n);
+    }
+  }
+  if (!names.length) return null;
+  if (names.length === 1) return `at ${names[0]}`;
+  return `between ${names[0]} and ${names[names.length - 1]}`;
+}
+let highlightTicket = 0;
+/** Light one block on the map; resolves to extra tooltip html (the cross streets). */
+async function highlightBlock(street, block) {
+  const ticket = ++highlightTicket;
+  const segs = await blockSegments(street, block);
+  if (ticket !== highlightTicket) return null;
+  const feature = segs.length ? { type: 'Feature', properties: {},
+    geometry: { type: 'MultiLineString', coordinates: segs.map((g) => g.xy.map(([x, y]) => [x / 1e5, y / 1e5])) } } : null;
+  setHighlight(feature);
+  if (feature) followTo(bounds(feature));
+  const between = await blockBetween(street, block, segs);
+  return between && ticket === highlightTicket ? `<span class="tip-between">${between}</span>` : null;
+}
+/** Go to a block (click in "Busiest blocks"): the 200 m view around its middle. */
+async function selectBlock(street, block) {
+  const segs = await blockSegments(street, block);
+  if (!segs.length) return;
+  const g = segs[Math.floor(segs.length / 2)];
+  const [a, b] = [g.xy[0], g.xy[g.xy.length - 1]];
+  const [x, y] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  clearHighlight();
+  selectPoint([x / 1e5, y / 1e5], `${blockLabel(block)} ${streetById(street)?.name ?? ''}`.trim());
+}
+/** Light a neighborhood (borough charts) and glide to it; no extra tooltip line. */
+function highlightArea(code) {
+  highlightTicket++;
+  const feature = ntaGeo.features.find((f) => f.properties.code === code);
+  setHighlight(feature ?? null);
+  if (feature) followTo(bounds(feature), { maxZoom: 14 });
+  return null;
+}
+function clearHighlight() {
+  highlightTicket++;
+  setHighlight(null);
+  followEnd();
+}
+
 /** A whole street: all its segments as one line. */
 async function selectStreet(id) {
   state.selected = { kind: 'street', id };
   setPin(null);
-  const rows = await query(`SELECT xy FROM street_segments WHERE street = ${id}`);
+  const [rows] = await Promise.all([query(`SELECT xy FROM street_segments WHERE street = ${id}`), streetSegments(id)]);
   if (state.selected?.kind !== 'street' || state.selected.id !== id) return;
   const lines = rows.map((r) => {
     const c = [];
@@ -375,6 +473,7 @@ function selectCity() {
 }
 function clearSelection() {
   state.selected = null;
+  setPanelView('details');
   $('#search').value = '';
   $('.search-clear').hidden = true;
   setSelection(null);
@@ -453,14 +552,14 @@ async function renderSelection(ticket) {
     const rates = meta.ntas.filter((x) => x.type === 'residential' && x.population >= 1000)
       .map((x) => (counts.get(x.code) ?? 0) / x.population);
     const rate = total / Math.max(1, info.population);
-    renderHeader(info.name, `<button class="link" data-boro="${info.boro}">${meta.boroughs[info.boro]}</button> · neighborhood (2020 NTA) · ${info.population ? `${fmt(info.population)} residents` : 'no resident population'}`);
+    renderHeader(info.name, `Neighborhood in <button class="link" data-boro="${info.boro}">${meta.boroughs[info.boro]}</button>, ${info.population ? `${fmt(info.population)} residents` : 'no resident population'}`);
     const years = perYear(daysOf(monthsOf(state.period)));
     const per100k = (r) => fmt((r * 100000) / years);
     showFigures([
       fig('Complaints', fmt(total)),
-      residential ? fig('Index', fmtIndex(rate / cityRate), 'the city rate per resident', false,
+      residential ? fig('Compared with typical', fmtIndex(rate / cityRate), 'the city rate per resident', false,
         `Complaints per resident ÷ the city rate. ${per100k(rate)} per 100,000 residents per year (city: ${per100k(cityRate)}).`)
-        : fig('Index', 'n/a', 'few or no residents'),
+        : fig('Compared with typical', 'n/a', 'few or no residents'),
       fig('Most frequent', top(byCat), '', true),
       residential ? fig('Percentile', ordinal(percentileOf(rates, rate)), 'among neighborhoods, per resident', false,
         'Share of residential neighborhoods (1,000+ residents) with a lower rate per resident.')
@@ -486,12 +585,12 @@ async function renderSelection(ticket) {
     const boroRates = byBoro.map((r) => r.n / boroughPopulation(r.boro));
     const rank = 1 + boroRates.filter((r) => r > rate).length;
     const years = perYear(daysOf(monthsOf(state.period)));
-    renderHeader(meta.boroughs[sel.code], `Borough · New York City · ${fmt(population)} residents (2020 Census)`);
+    renderHeader(meta.boroughs[sel.code], `Borough of New York City, ${fmt(population)} residents`);
     showFigures([
       fig('Complaints', fmt(total)),
-      cityRate ? fig('Index', fmtIndex(rate / cityRate), 'the city rate per resident', false,
+      cityRate ? fig('Compared with typical', fmtIndex(rate / cityRate), 'the city rate per resident', false,
         `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents per year (city: ${fmt((cityRate * 100000) / years)}).`)
-        : fig('Index', 'n/a'),
+        : fig('Compared with typical', 'n/a'),
       fig('Most frequent', top(byCat), '', true),
       fig('Rank', ordinal(rank), 'of 5 boroughs, per resident', false, 'Position among the five boroughs by complaints per resident (1st = highest).'),
     ], changeNote(total, prev[0]?.n ?? 0, compare));
@@ -527,13 +626,13 @@ async function renderSelection(ticket) {
     const rates = [...units].filter(([k]) => popOf(k) >= 1000).map(([k, n]) => n / popOf(k));
     const ranked = population >= 1000;
     const years = perYear(daysOf(monthsOf(state.period)));
-    renderHeader(precinctName(sel.props), `NYPD precinct${sel.props.merged ? 's' : ''} · ${meta.boroughs[boro[0]?.boro] ?? 'New York City'} · ${fmt(population)} residents (2020 Census)`
+    renderHeader(precinctName(sel.props), `NYPD precinct${sel.props.merged ? 's' : ''} in ${meta.boroughs[boro[0]?.boro] ?? 'New York City'}, ${fmt(population)} residents`
       + (sel.props.merged ? '<br>Shown together: the 116th was created from the 105th and 113th in December 2024.' : ''));
     showFigures([
       fig('Complaints', fmt(total)),
-      ranked ? fig('Index', fmtIndex(rate / cityRate), 'the city rate per resident', false,
+      ranked ? fig('Compared with typical', fmtIndex(rate / cityRate), 'the city rate per resident', false,
         `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents per year (city: ${fmt((cityRate * 100000) / years)}).`)
-        : fig('Index', 'n/a', 'few or no residents'),
+        : fig('Compared with typical', 'n/a', 'few or no residents'),
       fig('Most frequent', top(byCat), '', true),
       ranked ? fig('Percentile', ordinal(percentileOf(rates, rate)), `among ${units.size} precincts, per resident`, false,
         'Share of precincts with a lower rate of complaints per resident.')
@@ -558,11 +657,11 @@ async function renderSelection(ticket) {
     const median = values.length ? values[Math.floor(values.length / 2)] : 0;
     const nta = featureAt(ntaGeo, hexCenter(q, r));
     renderHeader('Hexagon', nta
-      ? `About 8 blocks, 180 m per side · in <button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>`
-      : 'About 8 blocks, 180 m per side');
+      ? `Hexagon of about 8 blocks in <button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>`
+      : 'Hexagon of about 8 blocks, 180 m per side');
     showFigures([
       fig('Complaints', fmt(total)),
-      median ? fig('Index', `${(total / median).toFixed(1)}×`, 'the median hexagon') : fig('Index', 'n/a'),
+      median ? fig('Compared with typical', `${(total / median).toFixed(1)}×`, 'the median hexagon') : fig('Compared with typical', 'n/a'),
       fig('Most frequent', top(byCat), '', true),
       fig('Percentile', ordinal(percentileOf(values, total)), 'among hexagons with complaints'),
     ], changeNote(total, prev[0]?.n ?? 0, compare));
@@ -589,21 +688,21 @@ async function renderPoint(sel, ticket, compare, top, sum) {
   const total = sum(byCat);
   const previous = compare ? sum(near(prevLoc)) : null;
   const fair = fairSeries();
-  let index = fig('Index', '—', fair.why, false, 'Complaints within 200 m ÷ the median 200 m circle in NYC.');
+  let index = fig('Compared with typical', '—', fair.why, false, 'Complaints within 200 m ÷ the median 200 m circle in NYC.');
   let pctl = fig('Percentile', '—', fair.why, false, 'Share of NYC 200 m circles with fewer complaints.');
   if (!fair.why) {
     const P = cmp.point[fair.type][fair.series];
     const x = total / fair.years;
     const circles = fmt(cmp.grid_points);
     index = P[50] > 0
-      ? fig('Index', fmtIndex(x / P[50]), 'the typical 200 m circle in NYC', false,
+      ? fig('Compared with typical', fmtIndex(x / P[50]), 'the typical 200 m circle in NYC', false,
         `Complaints within 200 m ÷ the median of ${circles} circles of 200 m centered every 100 m on land, same offense types and ${fair.series === 'avg' ? 'yearly average' : 'year'} (median: ${fmt(P[50])}).`)
-      : fig('Index', 'n/a', 'the typical circle has none');
+      : fig('Compared with typical', 'n/a', 'the typical circle has none');
     pctl = fig('Percentile', ordinal(shareBelow(P, x)), 'among 200 m circles in NYC', false,
       `Share of the ${circles} 200 m circles across NYC with fewer complaints.`);
   }
   const nta = featureAt(ntaGeo, sel.lngLat);
-  renderHeader(sel.label, `${sel.corner ? 'Corner' : 'Address'} · ${nta ? `<button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>` : 'New York City'} · ${RADIUS_M}&nbsp;m radius`);
+  renderHeader(sel.label, `Within ${RADIUS_M}&nbsp;m of this ${sel.corner ? 'corner' : 'address'}${nta ? ` in <button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>` : ''}`);
   showFigures([
     fig(`Within ${RADIUS_M}&nbsp;m`, fmt(total), 'complaints'),
     index,
@@ -643,14 +742,14 @@ async function renderStreet(sel, ticket, compare, top, sum) {
       'Share of NYC streets 300 m or longer with a lower rate of complaints per 100 m.');
   }
   const ntas = s.nNtas > 3 ? `${s.nNtas} neighborhoods` : s.ntas.map((c) => meta.ntas[c]?.name).filter(Boolean).join(', ');
-  renderHeader(s.name, `Whole street · ${fmtLength(s.length)} · ${meta.boroughs[s.boro]}${ntas ? ` · ${ntas}` : ''}`);
+  renderHeader(s.name, `Street in ${meta.boroughs[s.boro]}, ${fmtLength(s.length)} long${ntas ? `, through ${ntas}` : ''}`);
   const notes = [changeNote(total, prev[0]?.n ?? 0, compare)];
   if (busiest[0]?.n) notes.push(`Busiest block: numbers ${blockLabel(busiest[0].block)} (${fmt(busiest[0].n)})`);
   showFigures([
     fig('Complaints', fmt(total), `${rateText(rate)} per 100 m`),
-    cityRate > 0 ? fig('Index', fmtIndex(rate / cityRate), 'the NYC street average per 100 m', false,
+    cityRate > 0 ? fig('Compared with typical', fmtIndex(rate / cityRate), 'the NYC street average per 100 m', false,
       `Complaints per 100 m of this street ÷ all complaints on NYC streets per 100 m of street (${rateText(cityRate)}).`)
-      : fig('Index', 'n/a'),
+      : fig('Compared with typical', 'n/a'),
     fig('Most frequent', top(byCat), '', true),
     pctl,
   ], notes.filter(Boolean).join('\n'));
@@ -665,6 +764,177 @@ function selectionGroup() {
   if (!state.cats.size || state.cats.size === meta.categories.length) return null;
   const groups = new Set([...state.cats].map((c) => meta.categories[c].group));
   return groups.size === 1 ? [...groups][0] : null;
+}
+
+// ---------- charts: how the selected place changed over time (src/report.js, src/charts.js)
+const toSeries = (rows) => {
+  const out = new Map();
+  for (const r of rows) {
+    if (!out.has(r.cat)) out.set(r.cat, new Float64Array(120));
+    out.get(r.cat)[r.m] += r.n;
+  }
+  return out;
+};
+const cache = new Map();
+const cachedQuery = (key, sql) => { if (!cache.has(key)) cache.set(key, query(sql).then(toSeries)); return cache.get(key); };
+const catList = (cats) => [...cats].join(',') || '-1';
+const yearsOf = (months) => [...new Set(months.map((m) => 2016 + Math.floor(m / 12)))];
+
+function chartColor() {
+  const g = selectionGroup();
+  const dark = document.documentElement.dataset.theme === 'dark';
+  if (g) return dark ? GROUP_COLORS[g] : GROUP_RAMPS[g].light[4];
+  return dark ? '#4f9dd6' : '#2468a5';
+}
+
+/** Rows {lat, lon, ...} inside a hexagon or a 200 m circle (the SQL box is only a first cut). */
+const insideSel = (sel) => (sel.kind === 'hex'
+  ? (r) => { const h = hexAt([r.lon, r.lat]); return h.q === sel.q && h.r === sel.r; }
+  : (r) => meters(sel.lngLat, [r.lon, r.lat]) <= RADIUS_M);
+const boxOf = (sel) => {
+  const [lon, lat] = sel.kind === 'hex' ? hexCenter(sel.q, sel.r) : sel.lngLat;
+  const m = sel.kind === 'hex' ? meta.grid.side * 1.05 : RADIUS_M;
+  return `lat BETWEEN ${lat - degLat(m)} AND ${lat + degLat(m)} AND lon BETWEEN ${lon - degLon(m)} AND ${lon + degLon(m)}`;
+};
+
+/** Where the chart data for the current selection comes from. */
+async function chartContext(sel) {
+  const nycAll = () => cachedQuery('nyc:all', 'SELECT m, cat, sum(n)::INTEGER AS n FROM agg_precinct GROUP BY 1, 2');
+  const nycMapped = () => cachedQuery('nyc:mapped', 'SELECT m, cat, sum(n)::INTEGER AS n FROM hex GROUP BY 1, 2');
+  const fromAggTime = (kind, ids) => async (months, cats) => {
+    const years = yearsOf(months);
+    const rows = await query(`SELECT dow, hour, sum(n)::INTEGER AS n FROM agg_time WHERE kind = ${kind} AND id IN (${ids.join(',')})
+      AND year IN (${years.join(',')}) AND cat IN (${catList(cats)}) GROUP BY 1, 2`);
+    const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
+    for (const r of rows) if (r.dow >= 0 && r.hour >= 0) grid[r.dow][r.hour] += r.n;
+    const whole = months.length === years.length * 12;
+    return { grid, years: whole ? null : years };
+  };
+  const fromIncidents = async (months, cats) => {
+    const rows = await query(`SELECT lat, lon, dow, hour, count(*)::INTEGER AS n FROM incidents
+      WHERE lt = 0 AND ${boxOf(sel)} AND ${monthSql(months)} AND cat IN (${catList(cats)}) GROUP BY ALL`);
+    const ok = insideSel(sel);
+    const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
+    for (const r of rows) if (ok(r) && r.dow >= 0 && r.hour >= 0) grid[r.dow][r.hour] += r.n;
+    return { grid, years: null };
+  };
+  await loadStreets(loadJson);
+  const blockRows = (rows) => rows.map((r) => ({
+    key: `${r.street}:${r.block}`, street: r.street, block: r.block, n: r.n, label: `${blockLabel(r.block)} ${streetById(r.street)?.name ?? ''}`.trim(),
+    name: streetById(r.street)?.name ?? '', range: blockLabel(r.block),
+  }));
+  // The busiest 40 blocks; with "only" (the rows of another period), exactly those blocks, so the
+  // earlier period is not limited to its own top 40 (which would show real blocks as 0 before).
+  const areaBlocks = (from, filter, count = 'sum(p.n)') => async (months, cats, only) => blockRows(await query(`
+    SELECT ls.street, ls.block, ${count}::INTEGER AS n FROM ${from} JOIN loc_street ls USING (lat, lon)
+    WHERE ${filter} AND ls.block >= 0 AND ${monthSql(months)} AND cat IN (${catList(cats)})
+    ${only ? `AND ls.street::BIGINT * 10000000 + ls.block IN (${only.map((b) => b.street * 10_000_000 + b.block).join(',') || -1})` : ''}
+    GROUP BY 1, 2 ORDER BY 3 DESC ${only ? '' : 'LIMIT 40'}`));
+
+  switch (sel.kind) {
+    case 'city':
+      return { name: 'New York City', byCat: nycAll, nycByCat: nycAll, time: fromAggTime(0, [0]), blocks: null };
+    case 'borough': {
+      const ntas = meta.ntas.filter((n) => n.boro === sel.code).map((n) => n.code);
+      return {
+        name: meta.boroughs[sel.code], nycByCat: nycAll, time: fromAggTime(1, [sel.code]),
+        byCat: () => cachedQuery(`b:${sel.code}`, `SELECT m, cat, sum(n)::INTEGER AS n FROM agg_precinct WHERE boro = ${sel.code} GROUP BY 1, 2`),
+        blocks: areaBlocks('points p', `p.nta IN (${ntas.join(',')})`),
+        areas: async (months, cats) => (await query(`SELECT nta, sum(n)::INTEGER AS n FROM agg_nta
+          WHERE nta IN (${ntas.join(',')}) AND ${monthSql(months)} AND cat IN (${catList(cats)}) GROUP BY 1`))
+          .map((r) => ({ key: r.nta, label: meta.ntas[r.nta].name, n: r.n, residential: meta.ntas[r.nta].type === 'residential' })),
+      };
+    }
+    case 'precinct': {
+      const pcts = sel.props.merged ?? [sel.props.pct];
+      return {
+        name: precinctName(sel.props), nycByCat: nycAll, time: fromAggTime(2, pcts),
+        byCat: () => cachedQuery(`p:${pcts}`, `SELECT m, cat, sum(n)::INTEGER AS n FROM agg_precinct WHERE pct IN (${pcts.join(',')}) GROUP BY 1, 2`),
+        blocks: areaBlocks('incidents p', `p.pct IN (${pcts.join(',')}) AND p.lt = 0`, 'count(*)'),
+      };
+    }
+    case 'nta':
+      return {
+        name: meta.ntas[sel.code].name, nycByCat: nycMapped, time: fromAggTime(3, [sel.code]),
+        byCat: () => cachedQuery(`n:${sel.code}`, `SELECT m, cat, sum(n)::INTEGER AS n FROM agg_nta WHERE nta = ${sel.code} GROUP BY 1, 2`),
+        blocks: areaBlocks('points p', `p.nta = ${sel.code}`),
+      };
+    case 'street': {
+      const s = streetById(sel.id);
+      return {
+        name: s.name, nycByCat: nycMapped, time: fromAggTime(4, [sel.id]),
+        byCat: () => cachedQuery(`s:${sel.id}`, `SELECT m, cat, sum(n)::INTEGER AS n FROM street_blocks WHERE street = ${sel.id} GROUP BY 1, 2`),
+        blocks: async (months, cats) => (await query(`SELECT block, sum(n)::INTEGER AS n FROM street_blocks
+          WHERE street = ${sel.id} AND block >= 0 AND ${monthSql(months)} AND cat IN (${catList(cats)}) GROUP BY 1`))
+          .map((r) => ({ key: r.block, street: sel.id, block: r.block, n: r.n, order: r.block, label: blockLabel(r.block),
+            short: r.block >= 1_000_000 ? `${Math.floor((r.block - 1_000_000) / 1000)}-` : String(r.block) })),
+      };
+    }
+    case 'hex':
+    case 'point': {
+      const ok = insideSel(sel);
+      const byCat = async () => {
+        const rows = await query(`SELECT lat, lon, m, cat, sum(n)::INTEGER AS n FROM points WHERE ${boxOf(sel)} GROUP BY ALL`);
+        return toSeries(rows.filter(ok));
+      };
+      const blocks = sel.kind === 'point' ? null : async (months, cats) => {
+        const rows = await query(`SELECT p.lat, p.lon, ls.street, ls.block, sum(p.n)::INTEGER AS n FROM points p
+          JOIN loc_street ls USING (lat, lon) WHERE ${boxOf(sel).replaceAll('lat', 'p.lat').replaceAll('lon', 'p.lon')}
+          AND ls.block >= 0 AND ${monthSql(months)} AND cat IN (${catList(cats)}) GROUP BY ALL`);
+        const agg = new Map();
+        for (const r of rows.filter(ok)) {
+          const k = `${r.street}:${r.block}`;
+          agg.set(k, { street: r.street, block: r.block, n: (agg.get(k)?.n ?? 0) + r.n });
+        }
+        return blockRows([...agg.values()].sort((a, b) => b.n - a.n));
+      };
+      return { name: sel.label ?? 'Hexagon', byCat, nycByCat: nycMapped, time: fromIncidents, blocks };
+    }
+    default:
+      return null;
+  }
+}
+
+function setPanelView(view) {
+  state.panelView = view;
+  $('.details-view').hidden = view !== 'details';
+  $('.charts-view').hidden = view !== 'charts';
+  $('.detail').classList.toggle('charts-mode', view === 'charts');
+  $('.charts-back').setAttribute('aria-selected', String(view === 'details'));
+  $('.charts-open').setAttribute('aria-selected', String(view === 'charts'));
+}
+
+let chartDraws = [];
+async function renderCharts(ticket) {
+  if (state.panelView !== 'charts' || !state.selected) return;
+  const list = $('.charts-list');
+  if (!list.children.length) list.innerHTML = '<p class="charts-loading">Loading charts</p>';
+  const src = await chartContext(state.selected);
+  if (!src || ticket !== pending) return;
+  const compare = comparisonOf(state.period);
+  const report = await buildReport({
+    ...src, kind: state.selected.kind, period: state.period, months: monthsOf(state.period),
+    prevMonths: compare?.months ?? null, prevLabel: compare?.label ?? '', periodLabel: periodLabel(),
+    cats: state.cats, categories: meta.categories, color: chartColor(), highlightBlock, clearHighlight,
+    highlightArea, selectArea: (code) => selectNta(code, { move: true }), selectBlock,
+  });
+  if (ticket !== pending) return;
+  list.innerHTML = '';
+  chartDraws = [];
+  for (const s of report.sections) {
+    const card = document.createElement('section');
+    card.className = 'chart-card';
+    const legend = (s.legend ?? []).map(([cls, label]) => `<span class="key ${cls}"><i style="--c:${chartColor()}"></i>${label}</span>`).join('');
+    card.innerHTML = `<h3>${s.title}</h3><p class="answer">${s.answer}</p>${legend ? `<div class="chart-legend">${legend}</div>` : ''}
+      <div class="chart-host"></div>${s.note ? `<p class="chart-note">${s.note}</p>` : ''}`;
+    list.append(card);
+    const host = card.querySelector('.chart-host');
+    const draw = () => s.draw(host);
+    draw();
+    chartDraws.push(draw);
+  }
+  $('.charts-hidden').innerHTML = report.hidden.length
+    ? `<strong>Not shown</strong> ${report.hidden.map((h) => `${h.title}: ${h.why}.`).join(' ')}` : '';
 }
 
 // ---------- refresh everything for the current filters
@@ -690,13 +960,15 @@ async function refresh() {
   setHexagons(hex, periodLabel());
   const panel = $('.detail');
   if (state.selected?.kind === 'city') {
-    renderHeader('New York City', `All five boroughs · ${fmt(meta.totals.population_2020)} residents (2020 Census)`);
+    renderHeader('New York City', `All five boroughs, ${fmt(meta.totals.population_2020)} residents`);
     renderCity({ total, precinctOnly: lt[1] ?? 0, previous: previous[0]?.n, compare, days: daysOf(monthsOf(state.period)) });
     renderBars(byCat);
     $('.detail .note').textContent = CITY_NOTE;
   } else if (state.selected) {
     await renderSelection(ticket);
   }
+  if (ticket !== pending) return;
+  await renderCharts(ticket);
   if (ticket !== pending) return;
   if (panel.hidden !== !state.selected) {          // opening: always start expanded
     panel.hidden = !state.selected;
@@ -788,6 +1060,23 @@ async function main() {
   meta = m;
   ntaGeo = g;
   $('.detail .close').onclick = clearSelection;
+  $('.charts-open').onclick = () => { setPanelView('charts'); $('.detail-body').scrollTop = 0; renderCharts(pending); };
+  $('.charts-back').onclick = () => setPanelView('details');
+  // Tabs: arrow keys move between "Details" and "Over time" (WAI-ARIA tabs pattern)
+  $('.tabs').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const next = state.panelView === 'charts' ? $('.charts-back') : $('.charts-open');
+    next.click(); next.focus(); e.preventDefault();
+  });
+  $('.detail .expand').onclick = (e) => {
+    state.wide = !state.wide;
+    e.currentTarget.setAttribute('aria-pressed', String(state.wide));
+    e.currentTarget.setAttribute('aria-label', state.wide ? 'Narrow panel' : 'Expand panel');
+    e.currentTarget.title = state.wide ? 'Narrow panel' : 'Expand panel';
+    $('.detail').classList.toggle('wide', state.wide);
+  };
+  let redraw;
+  new ResizeObserver(() => { clearTimeout(redraw); redraw = setTimeout(() => chartDraws.forEach((d) => d()), 60); }).observe($('.charts-list'));
   $('#city-total').onclick = () => (state.selected?.kind === 'city' ? clearSelection() : selectCity());
   $('.detail .updated').textContent = updatedLabel();
   const pctBoro = await query(`SELECT pct, arg_max(boro, n) AS boro FROM
@@ -797,10 +1086,10 @@ async function main() {
     ...meta.ntas.map((n) => ({
       type: 'area', level: 'nta', code: n.code, boro: n.boro, label: n.name, boroName: meta.boroughs[n.boro],
       group: n.type === 'residential' ? 'nta' : n.type === 'park' ? 'park' : 'place',
-      detail: `${n.type === 'residential' ? 'Neighborhood' : n.type === 'park' ? 'Park' : 'Place'} · ${meta.boroughs[n.boro]}`,
+      detail: `${n.type === 'residential' ? 'Neighborhood' : n.type === 'park' ? 'Park' : 'Place'} in ${meta.boroughs[n.boro]}`,
     })),
     ...pctBoro.map((p) => ({ type: 'area', level: 'precinct', group: 'precinct', code: p.pct, boro: p.boro, boroName: meta.boroughs[p.boro],
-      label: precinctName({ pct: p.pct }), detail: `Precinct · ${meta.boroughs[p.boro]}` })),
+      label: precinctName({ pct: p.pct }), detail: `Precinct in ${meta.boroughs[p.boro]}` })),
   ];
   const searchDeps = {
     query, places,
@@ -842,7 +1131,7 @@ async function main() {
   if (params.has('db')) {                        // test mode only: hooks for headless tests
     window.__nycmap = map;
     window.__hexStats = hexStats;
-    window.__select = { city: selectCity, precinct: (pct) => selectPrecinct(precinctUnit(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, point: selectPoint, street: selectStreet, clear: clearSelection };
+    window.__select = { city: selectCity, precinct: (pct) => (precinctGeo ? selectPrecinct(precinctUnit(pct)) : selectPrecinctNumber(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, point: selectPoint, street: selectStreet, clear: clearSelection };
   }
   await refresh();
 }

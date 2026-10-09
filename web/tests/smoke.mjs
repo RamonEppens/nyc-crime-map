@@ -131,6 +131,44 @@ for (const theme of ['dark', 'light']) {
   console.log(theme, 'neighborhood:', ntaTitle, '|', (await page.textContent('.detail .context')).trim(), '|',
     (await page.textContent('.figures')).replace(/\s+/g, ' ').trim(), '|', (await page.textContent('.figures-note')).trim());
   await page.screenshot({ path: `${out}/${theme}-nta-selected.png` });
+  // Charts: always "Over the years" first; modules that do not apply say why; back to details.
+  await page.click('.charts-open');
+  await page.waitForFunction(() => document.querySelectorAll('.chart-card .chart-svg').length >= 3, null, { timeout: 30000 });
+  const chartTitles = await page.$$eval('.chart-card h3', (els) => els.map((e) => e.textContent));
+  const notShown = (await page.textContent('.charts-hidden')).trim();
+  console.log(theme, 'charts:', chartTitles.join(' | '), '| not shown:', notShown.slice(0, 80));
+  if (chartTitles[0] !== 'Over the years') errors.push(`${theme}: charts should start with "Over the years" (${chartTitles[0]})`);
+  if (!chartTitles.includes('Day and hour') || !chartTitles.includes('Busiest blocks')) errors.push(`${theme}: neighborhood charts missing modules (${chartTitles})`);
+  if (!/When in the year/.test(notShown)) errors.push(`${theme}: a single year should explain why "When in the year" is not shown`);
+  // Hovering a block in "Busiest blocks" lights it on the map and names its cross streets.
+  // The camera follows the hovered block (up to zoom 15) and glides back when the pointer leaves.
+  const blockCard = page.locator('.chart-card', { has: page.locator('h3', { hasText: 'Busiest blocks' }) });
+  await blockCard.scrollIntoViewIfNeeded();
+  if ((await blockCard.locator('.rank-bar').count()) !== 10) errors.push(`${theme}: a single year should rank the ten busiest blocks`);
+  const zoomBefore = await page.evaluate(() => window.__nycmap.getZoom());
+  await blockCard.locator('.hit').first().hover();
+  await page.waitForFunction(() => window.__nycmap.getZoom() > 14.5, null, { timeout: 30000 })
+    .catch(() => errors.push(`${theme}: the camera should follow the hovered block`));
+  await page.waitForFunction(() => document.body.dataset.highlight === 'on', null, { timeout: 10000 })
+    .catch(() => errors.push(`${theme}: hovering a busiest block should light it on the map`));
+  await page.waitForTimeout(800);
+  const blockTip = (await blockCard.locator('.chart-tip').innerText()).replace(/\n/g, ' | ');
+  console.log(theme, 'block tip:', blockTip);
+  if (!/ (between|at) /.test(blockTip)) errors.push(`${theme}: block tooltip should name the cross streets (${blockTip})`);
+  await page.screenshot({ path: `${out}/${theme}-block-highlight.png` });
+  await page.mouse.move(700, 450);
+  await page.waitForTimeout(300);
+  if (await page.evaluate(() => document.body.dataset.highlight === 'on')) errors.push(`${theme}: leaving the block should clear the highlight`);
+  await page.waitForFunction((z) => Math.abs(window.__nycmap.getZoom() - z) < 0.05, zoomBefore, { timeout: 30000 })
+    .catch(() => errors.push(`${theme}: the camera should glide back after leaving the chart`));
+  await page.click('.detail .expand');
+  await page.waitForFunction(() => document.querySelector('.detail').getBoundingClientRect().width >= 600, null, { timeout: 10000 }).catch(() => {});
+  const wide = await page.$eval('.detail', (e) => e.getBoundingClientRect().width);
+  if (wide < 600) errors.push(`${theme}: expand should widen the panel (${wide}px)`);
+  await page.screenshot({ path: `${out}/${theme}-charts-wide.png` });
+  await page.click('.detail .expand');
+  await page.click('.charts-back');
+  if (!(await page.isVisible('.detail .figures'))) errors.push(`${theme}: "Details" should bring the figures back`);
   await page.click('.detail .close');
   await page.waitForTimeout(800);
   if (!(await page.isHidden('.detail'))) errors.push(`${theme}: close did not hide the panel`);
@@ -152,9 +190,9 @@ for (const theme of ['dark', 'light']) {
     };
   };
   const cases = [
-    ['350 5th ave', /^350 5th Avenue Manhattan · Midtown South/, '350 5th Avenue', /within 200 m/i, 'address'],
-    ['5th ave and w 42nd st', /^5th Avenue & West 42nd Street Corner · Manhattan/, '5th Avenue & West 42nd Street', /within 200 m/i, 'corner'],
-    ['37-12 80th st', /^37-12 80th Street Queens · Jackson Heights/, '37-12 80th Street', /within 200 m/i, null],
+    ['350 5th ave', /^350 5th Avenue Manhattan, Midtown South/, '350 5th Avenue', /within 200 m/i, 'address'],
+    ['5th ave and w 42nd st', /^5th Avenue & West 42nd Street Corner in Manhattan/, '5th Avenue & West 42nd Street', /within 200 m/i, 'corner'],
+    ['37-12 80th st', /^37-12 80th Street Queens, Jackson Heights/, '37-12 80th Street', /within 200 m/i, null],
     ['broadway manhattan', /^Broadway Manhattan/, 'Broadway', /per 100 m/, 'street'],
     ['75th precinct', /^75th Precinct Brooklyn/, '75th Precinct', /city rate per resident/, null],
   ];
@@ -225,6 +263,21 @@ for (const theme of ['dark', 'light']) {
     (await page.textContent('.figures')).replace(/\s+/g, ' ').trim(), '|', (await page.textContent('.figures-note')).trim());
   if (boro !== 'Brooklyn') errors.push(`${theme}: Enter did not pick Brooklyn (${boro})`);
   await page.screenshot({ path: `${out}/${theme}-borough.png` });
+  // Borough charts list its neighborhoods; hovering one outlines it in yellow/orange.
+  await page.click('.charts-open');
+  await page.waitForFunction(() => [...document.querySelectorAll('.chart-card h3')].some((h) => h.textContent === 'Neighborhoods'), null, { timeout: 60000 })
+    .catch(() => errors.push(`${theme}: borough charts should include "Neighborhoods"`));
+  const hoods = page.locator('.chart-card', { has: page.locator('h3', { hasText: 'Neighborhoods' }) });
+  await hoods.scrollIntoViewIfNeeded();
+  await hoods.locator('.hit').first().hover();
+  await page.waitForFunction(() => document.body.dataset.highlight === 'on', null, { timeout: 10000 })
+    .catch(() => errors.push(`${theme}: hovering a neighborhood should outline it on the map`));
+  console.log(theme, 'neighborhoods:', (await hoods.locator('.answer').innerText()), '|', (await hoods.locator('.chart-tip').innerText()).replace(/\n/g, ' | '));
+  const tipBox = await hoods.locator('.chart-tip').boundingBox();
+  const plotBox = await hoods.locator('.chart-svg').boundingBox();
+  if (tipBox.y + tipBox.height > plotBox.y + 1) errors.push(`${theme}: the tooltip should sit above the plot, not on it`);
+  await page.mouse.move(700, 450);
+  await page.click('.charts-back');
   await page.click('.detail .close');
   await page.waitForTimeout(800);
   await page.evaluate(() => window.__nycmap.jumpTo({ center: [-73.965, 40.715], zoom: 11, pitch: 45, bearing: -12 }));

@@ -70,6 +70,9 @@ export async function createMap(container, opts) {
   overlay = new MapboxOverlay({ interleaved: false, layers: [], getTooltip: tooltip });
   map.addControl(overlay);
 
+  for (const type of ['dragstart', 'wheel', 'rotatestart', 'pitchstart']) {
+    map.on(type, (e) => { if (e.originalEvent) stopFollow(); });   // only the user's own moves
+  }
   map.on('zoom', render);                         // keeps the column/point transition smooth
   // Clicks: a hexagon column or a location dot selects that hexagon; elsewhere, the neighborhood.
   map.on('click', (e) => {
@@ -212,6 +215,18 @@ export function setTint(group) {
 export function setSelection(feature, style = 'outline') {
   state.selection = feature;
   state.selectionStyle = style;
+  state.highlight = null;
+  stopFollow();
+  render();
+}
+
+const isArea = (f) => /Polygon/.test(f?.geometry?.type ?? '');
+const highlightRgb = (alpha) => [...(theme === 'dark' ? [255, 214, 102] : [230, 120, 20]), alpha];
+
+/** One block of the selected street, lit while the pointer is over it in a chart (null = none). */
+export function setHighlight(feature) {
+  state.highlight = feature;
+  document.body.dataset.highlight = feature ? 'on' : '';
   render();
 }
 
@@ -244,6 +259,64 @@ export function fitTo(bounds, { maxZoom = 15, duration = 1600 } = {}) {
 export function showBounds(bounds) {
   map.fitBounds(bounds, { padding: PADDING, maxZoom: 14,
     pitch: map.getPitch(), bearing: map.getBearing(), duration: 900 });
+}
+
+// ---------- follow camera: while the pointer moves along a chart, the map glides to each block it
+// lights, like a camera following a car; when the pointer leaves the chart it glides back.
+const FOLLOW_ZOOM = 15;           // about two kilometres across the free part of the map: the block plus its surroundings
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let followHome = null;            // camera before following started; null = not following
+let followTimer = 0;
+let returnTimer = 0;
+
+/** The free part of the map, between the left column and the details panel: its width, and the
+ *  horizontal offset that centres a point in it. */
+function freeArea() {
+  const width = map.getContainer().clientWidth;
+  const left = document.querySelector('.controls')?.getBoundingClientRect().right ?? 0;
+  const panel = document.querySelector('.detail');
+  const right = panel && !panel.hidden ? panel.getBoundingClientRect().left : width;
+  return { width: Math.max(200, right - left), offset: [Math.round((left + right) / 2 - width / 2), 0] };
+}
+
+/** Glide to a box [[w, s], [e, n]] (the hovered block or neighborhood): the whole box in the free
+ *  part of the map, but never closer than maxZoom. Rapid sweeps are coalesced so it doesn't stutter. */
+export function followTo(box, { maxZoom = FOLLOW_ZOOM } = {}) {
+  clearTimeout(returnTimer);
+  if (!followHome) {
+    followHome = { center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() };
+  }
+  clearTimeout(followTimer);
+  followTimer = setTimeout(() => {
+    const [[w, s], [e, n]] = box;
+    const free = freeArea();
+    const side = Math.max(40, (map.getContainer().clientWidth - free.width) / 2 + 40);   // zoom only; centring is the offset
+    const fit = map.cameraForBounds(box, { padding: { top: 90, bottom: 90, left: side, right: side } });
+    const zoom = Math.min(maxZoom, fit?.zoom ?? maxZoom);
+    map.easeTo({
+      center: [(w + e) / 2, (s + n) / 2], zoom, offset: free.offset,
+      duration: reducedMotion.matches ? 0 : 650, essential: true,
+    });
+  }, 60);
+}
+
+/** The pointer left the block: unless it lands on another one soon, glide back to where we were. */
+export function followEnd() {
+  clearTimeout(followTimer);
+  clearTimeout(returnTimer);
+  if (!followHome) return;
+  returnTimer = setTimeout(() => {
+    const home = followHome;
+    followHome = null;
+    map.easeTo({ ...home, duration: reducedMotion.matches ? 0 : 900, essential: true });
+  }, 500);
+}
+
+/** Forget the return trip (a new selection, or the user moved the map themselves). */
+function stopFollow() {
+  clearTimeout(followTimer);
+  clearTimeout(returnTimer);
+  followHome = null;
 }
 
 /** For tests: size of the hexagon array, hexagons with data, and the array itself (identity). */
@@ -339,16 +412,16 @@ function render() {
   // the light basemap keeps it visible on white.
   const style = state.selectionStyle;
   const neon = theme === 'dark' ? [57, 255, 136] : [0, 214, 104];
-  const width = style === 'line' ? 5 : 3;
+  const width = style === 'line' ? 3 : 1.75;
   const selData = state.selection ? [state.selection] : [];
   const glow = new GeoJsonLayer({
     id: 'selection-glow',
     data: selData,
     stroked: true,
     filled: false,
-    getLineColor: [...neon, theme === 'dark' ? 70 : 60],
+    getLineColor: [...neon, theme === 'dark' ? 50 : 42],
     lineWidthUnits: 'pixels',
-    getLineWidth: width + 9,
+    getLineWidth: width + 5,
     lineCapRounded: true,
     lineJointRounded: true,
     parameters: { depthCompare: 'always' },
@@ -368,7 +441,26 @@ function render() {
     parameters: { depthCompare: 'always' },
     updateTriggers: { getFillColor: [style, theme], getLineColor: theme, getLineWidth: style },
   });
-  overlay.setProps({ layers: [columns, points, ...precinctLayers(), glow, outline] });
+  // Highlight: one block of the street, in the warm complement of the blue data (yellow at night,
+  // orange by day, where yellow has no contrast), 9 px, on top of everything.
+  const highlight = state.highlight && new GeoJsonLayer({
+    id: 'highlight',
+    data: [state.highlight],
+    // A block is a thick 9 px stroke; a neighborhood is a 4 px outline with a faint fill of the
+    // same warm color, so the area reads as a shape without hiding the columns inside it.
+    stroked: true,
+    filled: isArea(state.highlight),
+    getLineColor: highlightRgb(255),
+    getFillColor: highlightRgb(46),
+    lineWidthUnits: 'pixels',
+    getLineWidth: isArea(state.highlight) ? 4 : 9,
+    lineWidthMinPixels: isArea(state.highlight) ? 4 : 9,
+    lineCapRounded: true,
+    lineJointRounded: true,
+    parameters: { depthCompare: 'always' },
+    updateTriggers: { getLineColor: theme, getFillColor: theme, getLineWidth: state.highlight },
+  });
+  overlay.setProps({ layers: [columns, points, ...precinctLayers(), glow, outline, highlight].filter(Boolean) });
 }
 
 function precinctLayers() {
@@ -432,7 +524,7 @@ function tooltip({ object, layer }) {
   if (layer?.id === 'precincts' && object) {
     const unit = precincts.units[object.u];
     return { className: 'deck-tooltip',
-      html: `<strong>${precinctName(unit.props)}</strong><br>${fmt(unit.n)} complaint${unit.n === 1 ? '' : 's'} · ${state.label}<span class="tip-hint">Click for details</span>` };
+      html: `<strong>${precinctName(unit.props)}</strong><br>${fmt(unit.n)} complaint${unit.n === 1 ? '' : 's'} in ${state.label}<span class="tip-hint">Click for details</span>` };
   }
   if (!object || !object.n) return null;
   if (layer.id === 'hex') {

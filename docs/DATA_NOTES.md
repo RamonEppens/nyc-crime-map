@@ -113,3 +113,17 @@ Rules are implemented in `pipeline/scripts/03_clean.py`; decisions are logged in
 - Comparison grid: 78,030 points every 100 m on land; for each, complaints within 200 m per offense
   type and year → 101 percentiles (`compare.json`). Typical 2025 circle (all offenses): 36
   complaints; 90th percentile 246. Typical street (≥ 300 m): 2.5 complaints per 100 m per year.
+
+## Charts (`09_charts.py`, `web/src/report.js`)
+- Time of day and weekday are those of the occurrence (NYPD's start time); counts stay by report year.
+  Unknown times are often recorded as midnight or noon: 00:00 holds 4.6% of complaints vs 3.1% at
+  1 am, 12:00 holds 5.7% vs 4.3% at 11 am (all years). The charts say so.
+- `agg_time.parquet`: complaints per place × report year × offense type × weekday × hour for the city,
+  boroughs, precincts (all complaints), neighborhoods and streets (mapped complaints; at an
+  intersection a complaint counts for every street there). 8.1 M rows, 10.8 MB; a place reads only its
+  own row groups. Exact locations and hexagons read `incidents.parquet` directly. For areas a period
+  that is not whole years uses the whole report years it touches (the chart says which).
+- `loc_street.parquet` (from 08): each complaint location → street(s) and hundred-block, for the
+  busiest blocks of an area.
+
+- Block highlight (hover in "Where exactly"): a block's line is the street's segments whose midpoint house number (numbered side) falls in the hundred, so a segment that only touches the edge does not count. In Manhattan a hundred-block of an avenue spans several cross streets (Broadway 2200–2299 is West 78th to West 83rd), so "between X and Y" names the outer corners.

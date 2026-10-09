@@ -43,6 +43,7 @@ uv run scripts/06_validate.py        # compare with NYPD CompStat -> docs/valida
 uv run scripts/07_web_data.py        # files the map loads -> data/web/
 uv run scripts/08_download_streets.py # network: CSCL centerline, 2020 census blocks + population
 uv run scripts/08_streets.py         # streets, corners, complaints per street, comparisons -> data/web/
+uv run scripts/09_charts.py          # day x hour per place for the charts -> data/web/agg_time.parquet
 uv run pytest                        # tests
 
 cd web

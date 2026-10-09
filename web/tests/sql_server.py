@@ -18,7 +18,7 @@ PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8765
 base = duckdb.connect()
 for name in ("hex", "agg_precinct", "agg_nta"):
     base.execute(f"CREATE TABLE {name} AS SELECT * FROM read_parquet('{(DATA / f'{name}.parquet').as_posix()}')")
-for name in ("incidents", "points", "street_segments", "street_corners", "street_blocks"):
+for name in ("incidents", "points", "street_segments", "street_corners", "street_blocks", "agg_time", "loc_street"):
     path = DATA / f"{name}.parquet"
     if path.exists():
         base.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{path.as_posix()}')")

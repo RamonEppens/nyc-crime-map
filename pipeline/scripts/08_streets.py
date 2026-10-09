@@ -9,6 +9,7 @@ Outputs (data/web/):
   street_segments.parquet segments with left/right house-number ranges and geometry, by street.
   street_corners.parquet  where two streets meet at the same level (overpasses are not corners).
   street_blocks.parquet   complaints per street x hundred-block x month x offense type.
+  loc_street.parquet      complaint location (lat, lon) -> street(s) and hundred-block.
   compare.json            what the details panel compares against: 200 m areas on a 100 m grid
                           (percentiles per type and year), streets (rate per 100 m), precinct
                           population (2020 Census blocks).
@@ -331,6 +332,9 @@ def main() -> None:
 
     con.register("ls", pa.table({"lat": pa.array(rows_ls["lat"], pa.float32()), "lon": pa.array(rows_ls["lon"], pa.float32()),
                                  "street": pa.array(rows_ls["street"], pa.int32()), "block": pa.array(rows_ls["block"], pa.int32())}))
+    # Which street(s) and block each complaint location belongs to (charts: busiest blocks, day x hour)
+    con.execute(f"COPY (SELECT * FROM ls ORDER BY lat, lon, street) TO '{(web / 'loc_street.parquet').as_posix()}' "
+                "(FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 32768)")
     con.execute(f"""COPY (
         SELECT ls.street, ls.block, p.m, p.cat, sum(p.n)::INTEGER AS n
         FROM read_parquet('{(web / 'points.parquet').as_posix()}') p JOIN ls USING (lat, lon)

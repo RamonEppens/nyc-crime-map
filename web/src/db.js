@@ -14,7 +14,7 @@ export const DATA_URL = new URL(import.meta.env.VITE_DATA_URL || 'data/', docume
 
 // Small tables are copied into memory once; large ones stay remote and are read in pieces.
 const IN_MEMORY = ['hex', 'agg_precinct', 'agg_nta'];
-const REMOTE = ['incidents', 'points', 'street_segments', 'street_corners', 'street_blocks'];
+const REMOTE = ['incidents', 'points', 'street_segments', 'street_corners', 'street_blocks', 'agg_time', 'loc_street'];
 
 let run;
 

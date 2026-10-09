@@ -13,57 +13,58 @@
     <main class="map-wrap">
       <div id="map" role="region" aria-label="Map of reported complaints"></div>
 
-      <!-- Left column: separate blocks floating over the map -->
+      <!-- Left column: masthead with search, filters, legend -->
       <div class="controls" aria-label="Filters">
-        <header class="block brand">
+        <header class="block masthead brand">
           <div class="brand-row">
             <img src="logo.png" alt="" />
             <div>
               <h1>NYC Crime Map</h1>
-              <p>NYPD complaints · 2016–2025</p>
+              <p>NYPD complaints, 2016–2025</p>
             </div>
           </div>
-          <p class="summary" aria-live="polite">
-            <button class="link" id="city-total" title="Show the New York City summary">Loading data</button>
-            <span id="summary-filter"></span>
-          </p>
-          <p class="summary-sub" id="summary-sub"></p>
+          <div class="summary" aria-live="polite">
+            <button class="link total" id="city-total" title="Show the New York City summary">Loading data</button>
+            <span class="summary-filter" id="summary-filter"></span>
+            <span class="summary-sub" id="summary-sub"></span>
+          </div>
+          <div class="search" role="search">
+            <label class="visually-hidden" for="search">Search an address, street, neighborhood or borough</label>
+            <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+            <input id="search" type="search" placeholder="Address, street or neighborhood" autocomplete="off" spellcheck="false"
+              role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="search-results" />
+            <button class="search-clear" type="button" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <ul id="search-results" role="listbox" aria-label="Search results" hidden></ul>
+          </div>
         </header>
 
-        <div class="block search" role="search">
-          <label class="visually-hidden" for="search">Search an address, neighborhood or borough</label>
-          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/></svg>
-          <input id="search" type="search" placeholder="Address, neighborhood or borough" autocomplete="off" spellcheck="false"
-            role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="search-results" />
-          <button class="search-clear" type="button" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-          <ul id="search-results" role="listbox" aria-label="Search results" hidden></ul>
-        </div>
-
-        <section class="block" data-block="period">
-          <div class="block-head">
-            <h2 id="period-title">Date range</h2>
-            <button class="block-toggle" aria-expanded="true" aria-controls="period-body">Hide</button>
-          </div>
-          <div class="block-body" id="period-body">
-            <label class="visually-hidden" for="period-mode">How to choose the dates</label>
-            <div class="select-wrap"><select id="period-mode"></select></div>
-            <div class="period-inputs"></div>
-          </div>
-        </section>
-
-        <section class="block" data-block="offenses">
-          <div class="block-head">
-            <h2 id="offenses-title">Offense types</h2>
-            <button class="block-toggle" aria-expanded="true" aria-controls="offenses-body">Hide</button>
-          </div>
-          <div class="block-body flush" id="offenses-body">
-            <div class="cat-grid" role="group" aria-labelledby="offenses-title"></div>
-            <div class="block-foot">
-              <span class="hint" title="Counted in the totals, not drawn on the map">† Location withheld by NYPD</span>
-              <span class="foot-actions"><button data-select="all">All</button><button data-select="none">None</button></span>
+        <div class="block filters">
+          <section class="filter" data-block="period">
+            <div class="block-head">
+              <h2 id="period-title">Dates</h2>
+              <button class="block-toggle" aria-expanded="true" aria-controls="period-body">Hide</button>
             </div>
-          </div>
-        </section>
+            <div class="block-body" id="period-body">
+              <label class="visually-hidden" for="period-mode">How to choose the dates</label>
+              <div class="select-wrap"><select id="period-mode"></select></div>
+              <div class="period-inputs"></div>
+            </div>
+          </section>
+
+          <section class="filter" data-block="offenses">
+            <div class="block-head">
+              <h2 id="offenses-title">Offenses <span class="count" id="offenses-count"></span></h2>
+              <button class="block-toggle" aria-expanded="true" aria-controls="offenses-body">Hide</button>
+            </div>
+            <div class="block-body" id="offenses-body">
+              <div class="cat-grid" role="group" aria-labelledby="offenses-title"></div>
+              <div class="block-foot">
+                <span class="hint" title="Counted in the totals, not drawn on the map">† Location withheld by NYPD</span>
+                <span class="foot-actions"><button data-select="all">Select all</button><button data-select="none">Clear</button></span>
+              </div>
+            </div>
+          </section>
+        </div>
 
         <section class="block legend" data-block="legend" aria-labelledby="legend-title">
           <h2 id="legend-title">Complaints per hexagon</h2>
@@ -90,15 +91,23 @@
       <!-- Right: details of what is selected; only shown when something is -->
       <aside class="block detail" data-block="detail" aria-label="Details" aria-live="polite" hidden>
         <div class="detail-head">
-          <h2>New York City</h2>
-          <div class="detail-actions">
-            <button class="block-toggle" aria-expanded="true" aria-controls="detail-body">Hide</button>
-            <button class="close" aria-label="Close details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <div class="detail-top">
+            <h2 class="sign">New York City</h2>
+            <div class="detail-actions">
+              <button class="expand icon-btn" aria-pressed="false" aria-label="Expand panel" title="Expand panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></button>
+              <button class="block-toggle icon-btn" aria-expanded="true" aria-controls="detail-body">Hide</button>
+              <button class="close icon-btn" aria-label="Close details" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            </div>
           </div>
-        </div>
-        <div class="detail-body" id="detail-body">
           <p class="context" hidden></p>
           <p class="sub"></p>
+        </div>
+        <div class="detail-body" id="detail-body">
+          <div class="tabs" role="tablist" aria-label="Panel view">
+            <button class="tab charts-back" role="tab" aria-selected="true">Details</button>
+            <button class="tab charts-open" role="tab" aria-selected="false">Over time</button>
+          </div>
+          <div class="details-view">
           <div class="figures"></div>
           <p class="figures-note"></p>
           <div class="detail-section">
@@ -108,6 +117,12 @@
           </div>
           <p class="note"></p>
           <p class="credit">Data: <a href="https://data.cityofnewyork.us/d/qgea-i56i" target="_blank" rel="noopener">NYC Open Data, NYPD Complaint Data Historic</a>, updated <span class="updated"></span>. Independent project, not affiliated with the City of New York or the NYPD.</p>
+          </div>
+          <!-- Charts: how this place changed over time (src/report.js) -->
+          <div class="charts-view" hidden>
+            <div class="charts-list" aria-live="polite"></div>
+            <p class="charts-hidden"></p>
+          </div>
         </div>
       </aside>
     </main>

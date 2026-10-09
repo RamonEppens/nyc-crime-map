@@ -167,7 +167,7 @@ export function browseStart(places) {
 export async function suggest(raw, deps) {
   const { text, boro } = splitBorough(raw);
   if (!text) return [];
-  const placeOf = (s, lngLat) => [deps.boroName(s.boro), deps.ntaAt(lngLat)].filter(Boolean).join(' · ');
+  const placeOf = (s, lngLat) => [deps.boroName(s.boro), deps.ntaAt(lngLat)].filter(Boolean).join(', ');
   const section = (key, items, total = items.length, rank = 0) => ({ ...GROUP[key], items: items.slice(0, PER_GROUP[key]), total, rank });
 
   // 1. corner
@@ -192,7 +192,7 @@ export async function suggest(raw, deps) {
       .map((r) => {
         const a = streetById(r.sa); const b = streetById(r.sb);
         const lngLat = [r.x / 1e5, r.y / 1e5];
-        return { type: 'point', kind: 'corner', label: `${a.name} & ${b.name}`, detail: `Corner · ${placeOf(a, lngLat)}`, lngLat };
+        return { type: 'point', kind: 'corner', label: `${a.name} & ${b.name}`, detail: `Corner in ${placeOf(a, lngLat)}`, lngLat };
       });
     return items.length ? [section('point', items)] : [];
   }
@@ -242,8 +242,8 @@ export async function suggest(raw, deps) {
 function streetItem(s, deps) {
   return {
     type: 'street', id: s.id, label: s.name, boro: s.boro,
-    detail: `Whole street · ${deps.boroName(s.boro)}${s.nNtas > 2 ? ` · ${s.nNtas} neighborhoods`
-      : s.ntas.length ? ` · ${s.ntas.map(deps.ntaName).join(', ')}` : ''}`,
+    detail: `${deps.boroName(s.boro)}${s.nNtas > 2 ? `, ${s.nNtas} neighborhoods`
+      : s.ntas.length ? `, ${s.ntas.map(deps.ntaName).join(' and ')}` : ''}`,
   };
 }
 
@@ -388,7 +388,7 @@ export function setupSearch(input, list, deps, onChoose, onFocus) {
     for (const sec of res.sections) {
       if (sec.title) rows.push({ kind: 'sub', title: sec.title });
       for (const it of sec.items) {
-        rows.push({ kind: 'item', icon, item: { ...it, detail: key === 'street' ? it.detail.replace(/^Whole street · [^·]+(· )?/, '') : '' } });
+        rows.push({ kind: 'item', icon, item: { ...it, detail: key === 'street' ? it.detail.replace(/^[^,]+(, )?/, '') : '' } });
       }
     }
     list.dataset.query = `all:${key}`;
@@ -422,7 +422,7 @@ export function setupSearch(input, list, deps, onChoose, onFocus) {
         const sections = await suggest(text, deps);
         if (my !== ticket) return;                   // a newer keystroke won
         // Inside a section the kind is in its title, so details keep only what tells results apart.
-        rows = fromSections(sections, (it, sec) => (sec.key === 'street' ? it.detail.replace(/^Whole street · /, '')
+        rows = fromSections(sections, (it, sec) => (sec.key === 'street' ? it.detail
           : sec.key === 'point' ? it.detail : it.level === 'borough' ? '' : (it.boroName ?? it.detail)));
         list.dataset.query = text;                   // which text these results answer (tests wait on it)
         active = rows.findIndex((r) => r.kind === 'item');   // the first result is what Enter picks
