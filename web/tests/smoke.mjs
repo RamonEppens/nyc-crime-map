@@ -10,8 +10,8 @@ const base = process.argv[2] ?? 'http://localhost:5173/';
 const sql = process.argv[3] ?? 'http://localhost:8765';
 const out = process.argv[4] ?? 'tests/screens';
 const RAMPS = {
-  dark: ['#10263d', '#163654', '#1c466c', '#215785', '#26679d', '#2f78b3'],
-  light: ['#cfe0f0', '#a8c8e6', '#7aa9d6', '#4a88c2', '#2470ad', '#154f80'],
+  dark: ['#27364a', '#405369', '#5b728b', '#7692ad', '#93b3d1', '#b1d6f6'],
+  light: ['#d5e3f2', '#a7b9cf', '#7b91ad', '#526a8c', '#2d456c', '#0b214c'],
 };
 const hex = (rgbStr) => '#' + rgbStr.match(/\d+/g).slice(0, 3).map((v) => (+v).toString(16).padStart(2, '0')).join('');
 
@@ -67,9 +67,9 @@ for (const theme of ['dark', 'light']) {
   await page.screenshot({ path: `${out}/${theme}-only.png` });
   // One offense type (or one whole group) colors the map with its group's ramp; legend follows.
   const tinted = (await page.$$eval('.legend-ramp span', (els) => els.map((e) => getComputedStyle(e).backgroundColor))).map(hex);
-  const wantRed = theme === 'dark' ? '#d46c66' : '#8a3330';
+  const wantRed = theme === 'dark' ? '#ffa08d' : '#690313';
   console.log(theme, 'robbery only, legend top:', tinted.at(-1));
-  if (tinted.at(-1) !== wantRed) errors.push(`${theme}: one person-crime type should tint the map red (${tinted.at(-1)})`);
+  if (tinted.at(-1) !== wantRed) errors.push(`${theme}: one person-crime type should tint the map oxblood (${tinted.at(-1)})`);
   // Stable hexagon array: same length and order whatever the filter (needed for transitions).
   const before = await page.evaluate(() => window.__hexStats());
   await page.click('[data-select="all"]');
@@ -110,7 +110,7 @@ for (const theme of ['dark', 'light']) {
   if ((await first()) !== total2025) errors.push(`${theme}: All should restore ${total2025}`);
   await page.waitForTimeout(500);
   const blue = (await page.$$eval('.legend-ramp span', (els) => els.map((e) => getComputedStyle(e).backgroundColor))).map(hex);
-  if (JSON.stringify(blue) !== JSON.stringify(RAMPS[theme])) errors.push(`${theme}: All should bring back the blue ramp`);
+  if (JSON.stringify(blue) !== JSON.stringify(RAMPS[theme])) errors.push(`${theme}: All should bring back the ink ramp`);
   await page.click('[data-block="period"] .block-toggle');
   if (await page.isVisible('#period-body')) errors.push(`${theme}: Hide did not hide the date block`);
   await page.click('[data-block="period"] .block-toggle');
@@ -298,6 +298,18 @@ for (const theme of ['dark', 'light']) {
     '|', (await page.textContent('#summary-sub')).trim());
   if (pTitle !== 'Complaints per precinct') errors.push(`${theme}: legend title ${pTitle}`);
   if (Math.abs(flat[0]) > 0.5 || Math.abs(flat[1]) > 0.5) errors.push(`${theme}: precinct view is not flat (${flat})`);
+  // The 2D switch: boroughs, then back to precincts.
+  await page.click('.unit-switch');
+  await page.waitForTimeout(1500);
+  const bTitle = await page.textContent('#legend-title');
+  const bLabels = (await page.textContent('.legend-labels')).replace(/\s+/g, ' ').trim();
+  console.log(theme, 'borough view:', bTitle, '|', bLabels, '|', (await page.textContent('#summary-sub')).trim());
+  if (bTitle !== 'Complaints per borough') errors.push(`${theme}: the switch should show boroughs (${bTitle})`);
+  if ((await page.$$('.legend-ramp span')).length !== 5) errors.push(`${theme}: the borough key should have five shades`);
+  await page.screenshot({ path: `${out}/${theme}-boroughs.png` });
+  await page.click('.unit-switch');
+  await page.waitForTimeout(1200);
+  if ((await page.textContent('#legend-title')) !== 'Complaints per precinct') errors.push(`${theme}: the switch should go back to precincts`);
   await page.screenshot({ path: `${out}/${theme}-precincts.png` });
   await page.evaluate(() => window.__select.precinct(75));
   await page.waitForTimeout(1500);
@@ -330,7 +342,7 @@ for (const theme of ['dark', 'light']) {
   for (const [zoom, pitch, name] of [[12, 0, 'z12-top'], [13, 0, 'z13-top'], [13, 45, 'z13-tilt'], [14.2, 45, 'z14-points']]) {
     await page.evaluate(([z, p]) => window.__nycmap.jumpTo({ center: [-73.99, 40.735], zoom: z, pitch: p, bearing: -12 }), [zoom, pitch]);
     await settle(page);
-    await page.screenshot({ path: `${out}/${theme}-${name}.png`, clip: { x: 360, y: 0, width: 720, height: 900 } });
+    await page.screenshot({ path: `${out}/${theme}-${name}.png`, clip: { x: 360, y: 0, width: 720, height: 900 }, timeout: 90000 });   // software GL is slow here
   }
   await page.close();
 }

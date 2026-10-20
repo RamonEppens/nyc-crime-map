@@ -61,7 +61,7 @@ python tests/sql_server.py & npm run test:smoke   # headless test with the real 
 - Hex grid: `pipeline/scripts/hexgrid.py` (180 m pointy-top axial). The map reads the grid from `meta.json`;
   never hard-code grid constants in the web app. ColumnLayer radius = side, angle 90, coverage 1.
 - Basemaps: CARTO dark-matter / positron.
-- Font: Public Sans only, self-hosted (@fontsource). Tabular figures for numbers.
+- Fonts (decision #64): Newsreader (serif: masthead, place names, section and chart titles) and Schibsted Grotesk (everything else), both self-hosted (@fontsource). No other families. No glows, no floating cards, no brand green outside the logo: ink is the interface color, highlighter yellow (#FFCD28) only for hover-to-locate.
 - No icon libraries, emojis, gradients, glows, drop-shadow cards, bento grids or em dashes in copy.
   Separation by hairlines; radius 3 px for marks, 10 px for inputs and rows, 16 px for the floating blocks.
 - Layout (same as Ramón's BA map): map full width; every control on the left (brand with the total,

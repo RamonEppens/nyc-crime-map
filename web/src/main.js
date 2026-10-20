@@ -3,12 +3,12 @@ import './styles.css';
 import { initDb, query, loadJson } from './db.js';
 import {
   createMap, setTheme, setHexagons, setUniverse, hexStats, setSelection, showBounds,
-  setView, setPrecinctShapes, setPrecincts, precinctUnit, precinctName, setTint,
-  setPin, flyToPoint, fitTo, setHighlight, followTo, followEnd,
+  setView, setPrecinctShapes, setPrecincts, precinctUnit, precinctName, setTint, setBoroughShapes, setBoroughs, setUnit2d,
+  setPin, flyToPoint, fitTo, setHighlight, followTo, followEnd, setMask,
 } from './map.js';
 import { hexAt, hexCenter, hexPolygon, featureAt, meters, circlePolygon, bounds, degLat, degLon } from './geo.js';
 import { setupSearch, loadStreets, streetById } from './search.js';
-import { GROUP_COLORS, GROUP_LABELS, GROUP_RAMPS } from './colors.js';
+import { GROUP_COLORS, GROUP_LABELS, GROUP_RAMPS, RAMPS } from './colors.js';
 import { buildReport } from './report.js';
 import { fmt, fmtCompact, fmtChange, fmtShort } from './format.js';
 import {
@@ -131,14 +131,16 @@ function renderPeriod() {
     hint.textContent = `Every ${MONTH_NAMES[p.crossMonth]} from ${FIRST_YEAR} to ${LAST_YEAR}, combined.`;
     box.append(hint);
   } else if (p.mode === 'yearRange') {
+    // One row: [2016] to [2025]
+    const row = document.createElement('div');
+    row.className = 'range-row years';
     for (const [label, key] of [['From', 'fromYear'], ['To', 'toYear']]) {
-      const row = document.createElement('div');
-      row.className = 'range-row years';
-      row.innerHTML = `<span>${label}</span><div class="select-wrap"><select aria-label="${label} year">
-        ${YEARS.map((y) => option(y, y, y === p[key])).join('')}</select></div>`;
-      row.querySelector('select').onchange = (e) => set({ [key]: +e.target.value });
-      box.append(row);
+      if (key === 'toYear') row.insertAdjacentHTML('beforeend', '<span>to</span>');
+      row.insertAdjacentHTML('beforeend', `<div class="select-wrap"><select aria-label="${label} year">
+        ${YEARS.map((y) => option(y, y, y === p[key])).join('')}</select></div>`);
+      row.lastElementChild.querySelector('select').onchange = (e) => set({ [key]: +e.target.value });
     }
+    box.append(row);
   } else if (p.mode === 'monthRange') {
     for (const [label, key] of [['From', 'fromMonth'], ['To', 'toMonth']]) {
       const row = document.createElement('div');
@@ -151,36 +153,62 @@ function renderPeriod() {
 }
 
 // ---------- offense types block: one toggle per category, "only", All / None
+// Short names for the two-column key (the full name is the tooltip and is used everywhere else).
+const SHORT_LABELS = {
+  'Assault (misdemeanor)': 'Assault, misd.',
+  'Other crimes against persons': 'Other, persons',
+  'Traffic & impaired driving': 'Traffic & DUI',
+  'Public order & administration': 'Public order',
+};
+// Each group title is a checkbox for the whole group (checked, unchecked or mixed); its types sit
+// in two aligned columns underneath, so the eye can scan straight down. All 18 fit without scrolling.
 function renderCategories() {
   const grid = $('.cat-grid');
   grid.innerHTML = '';
   const total = meta.categories.length;
   $('#offenses-count').textContent = state.cats.size === total ? `all ${total}` : `${state.cats.size} of ${total}`;
+  const toggleOne = (code) => {
+    state.cats.has(code) ? state.cats.delete(code) : state.cats.add(code);
+    renderCategories(); refresh();
+    grid.querySelector(`[data-code="${code}"]`)?.focus();
+  };
   for (const g of Object.keys(GROUP_LABELS)) {
+    const cats = meta.categories.filter((x) => x.group === g);
+    const on = cats.filter((c) => state.cats.has(c.code)).length;
     const group = document.createElement('div');
     group.className = 'cat-group';
     group.style.setProperty('--g', GROUP_COLORS[g]);
-    group.innerHTML = `<h3 class="cat-group-title">${GROUP_LABELS[g]}${g === 'enforcement' ? ' <span class="group-note">(mostly reflect police activity)</span>' : ''}</h3><div class="chips"></div>`;
+    const checked = on === cats.length ? 'true' : on === 0 ? 'false' : 'mixed';
+    const note = g === 'enforcement' ? ' <span class="group-note">mostly police activity</span>' : '';
+    group.innerHTML = `<button class="cat-group-toggle" role="checkbox" aria-checked="${checked}" data-group="${g}">
+        <span class="box" aria-hidden="true"></span><span class="cat-group-title">${GROUP_LABELS[g]}</span>${note}</button>
+      ${cats.length > 1 ? '<div class="chips"></div>' : ''}`;
+    group.querySelector('.cat-group-toggle').onclick = () => {
+      // All on -> all off; otherwise -> all on.
+      for (const c of cats) on === cats.length ? state.cats.delete(c.code) : state.cats.add(c.code);
+      renderCategories(); refresh();
+      grid.querySelector(`[data-group="${g}"]`)?.focus();
+    };
     const chips = group.querySelector('.chips');
-    for (const c of meta.categories.filter((x) => x.group === g)) {
-      const cell = document.createElement('div');
-      cell.className = 'cat';
-      const on = state.cats.has(c.code);
-      const hidden = state.notMapped.has(c.code);
-      const tip = hidden ? `${c.label}: location withheld by NYPD, counted in totals but not drawn` : c.label;
-      cell.innerHTML = `<button class="cat-toggle" data-code="${c.code}" aria-pressed="${on}" title="${tip}">
-          <span class="dot" aria-hidden="true"></span><span class="name">${c.label}</span>${hidden ? '<span class="mark" aria-hidden="true">†</span>' : ''}</button>
-        <button class="cat-only" aria-label="Show only ${c.label}">only</button>`;
-      cell.querySelector('.cat-toggle').onclick = () => {
-        state.cats.has(c.code) ? state.cats.delete(c.code) : state.cats.add(c.code);
-        renderCategories(); refresh();
-        grid.querySelector(`[data-code="${c.code}"]`).focus();
-      };
-      cell.querySelector('.cat-only').onclick = () => {
-        state.cats = new Set([c.code]);
-        renderCategories(); refresh();
-      };
-      chips.append(cell);
+    if (chips) {
+      for (const c of cats) {
+        const cell = document.createElement('div');
+        cell.className = 'cat';
+        const hidden = state.notMapped.has(c.code);
+        const tip = hidden ? `${c.label}: location withheld by NYPD, counted in totals but not drawn` : c.label;
+        cell.innerHTML = `<button class="cat-toggle" data-code="${c.code}" aria-pressed="${state.cats.has(c.code)}" title="${tip}" aria-label="${c.label}">
+            <span class="dot" aria-hidden="true"></span><span class="name">${SHORT_LABELS[c.label] ?? c.label}</span>${hidden ? '<span class="mark" aria-hidden="true">†</span>' : ''}</button>
+          <button class="cat-only" aria-label="Show only ${c.label}">only</button>`;
+        cell.querySelector('.cat-toggle').onclick = () => toggleOne(c.code);
+        cell.querySelector('.cat-only').onclick = () => { state.cats = new Set([c.code]); renderCategories(); refresh(); };
+        chips.append(cell);
+      }
+    } else {
+      // A group with one type ("Other"): the title is the type; "only" still works on hover.
+      const c = cats[0];
+      group.classList.add('single');
+      group.querySelector('.cat-group-toggle').insertAdjacentHTML('afterend', `<button class="cat-only" aria-label="Show only ${c.label}">only</button>`);
+      group.querySelector('.cat-only').onclick = () => { state.cats = new Set([c.code]); renderCategories(); refresh(); };
     }
     grid.append(group);
   }
@@ -197,9 +225,11 @@ function setupCategoryActions() {
 // Legend: the same ramp and breaks the map is using right now (breaks follow the viewport).
 function renderLegend(ramp, breaks, unit = 'hexagon') {
   $('#legend-title').textContent = `Complaints per ${unit}`;
-  $('#legend-hint').textContent = unit === 'precinct'
-    ? 'A sixth of the precincts per color, sex crimes included'
+  $('#legend-hint').textContent = unit === 'precinct' ? 'A sixth of the precincts per color, sex crimes included'
+    : unit === 'borough' ? 'One shade per borough, fewest to most; sex crimes included'
     : 'Each color holds about a sixth of the hexagons in view';
+  $('.legend-ramp').style.setProperty('--k', ramp.length);
+  $('#legend-q').title = $('#legend-hint').textContent;   // the explanation lives in the "?"
   $('.legend-ramp').innerHTML = ramp.map((c) => `<span style="background:${c}"></span>`).join('');
   // Each break sits on the boundary between two colors (k / 6 of the width).
   $('.legend-labels').innerHTML = '<span class="end start">fewer</span>'
@@ -264,12 +294,16 @@ function renderBars(rows) {
 
 // Summary in the title block: the total for the current filters (a link to the city panel) and
 // what part of it the current view cannot draw.
-function renderSummary({ total, precinctOnly, none, noPrecinct }) {
+function renderSummary({ total, precinctOnly, none, noPrecinct, noBorough }) {
   $('#city-total').textContent = `${fmt(total)} complaints`;
-  $('#summary-filter').textContent = filterLabel();
+  // One sentence, like the dek under a headline: "579,560 complaints in 2025, all offenses.
+  // 16,430 have no location on the map."
+  $('#summary-filter').textContent = `in ${filterLabel()}.`;
+  const byBorough = state.unit2d === 'borough';
+  const missing = byBorough ? noBorough : noPrecinct;
   $('#summary-sub').textContent = state.view === 'precincts'
-    ? (noPrecinct ? `${fmt(noPrecinct)} without a precinct` : 'All drawn by precinct')
-    : `${fmt(precinctOnly + none)} not on the map (location withheld)`;
+    ? (missing > 0 ? `${fmt(missing)} have no ${byBorough ? 'borough' : 'precinct'}.` : `All are drawn by ${byBorough ? 'borough' : 'precinct'}.`)
+    : `${fmt(precinctOnly + none)} have no location on the map.`;
 }
 
 // ---------- selection: a neighborhood (NTA) or a hexagon, shown in the right panel
@@ -296,7 +330,7 @@ function renderHeader(title, context) {
 function selectNta(code, { move = false } = {}) {
   const feature = ntaGeo.features.find((f) => f.properties.code === code);
   state.selected = { kind: 'nta', code };
-  setSelection(feature, 'area');
+  setSelection(feature, 'area', meta.ntas[code]?.name);
   setPin(null);
   if (move) fitTo(bounds(feature), { maxZoom: 15, duration: 1600 });
   refresh();
@@ -308,7 +342,7 @@ async function selectBorough(code) {
   boroughGeo ??= await loadJson('boroughs.geojson');
   if (state.selected?.kind !== 'borough' || state.selected.code !== code) return;   // picked something else meanwhile
   const feature = boroughGeo.features.find((f) => f.properties.boro === code);
-  setSelection(feature, 'area');
+  setSelection(feature, 'area', meta.boroughs[code]);
   setPin(null);
   fitTo(bounds(feature), { maxZoom: 15, duration: 1600 });
   refresh();
@@ -326,7 +360,7 @@ const precinctMerged = () => Math.min(...monthsOf(state.period)) < SPLIT_MONTH;
 function selectPrecinct(props, { move = false } = {}) {
   state.selected = { kind: 'precinct', props };
   const feature = precinctGeo.features.find((f) => f.properties === props || (f.properties.pct === props.pct && !props.merged));
-  setSelection(feature, 'area');
+  setSelection(feature, 'area', feature && precinctName(feature.properties));
   setPin(null);
   if (move) fitTo(bounds(feature), { maxZoom: 15, duration: 1600 });
   refresh();
@@ -349,7 +383,7 @@ const RADIUS_M = 200;
 /** An address or a corner: pin + 200 m circle, flown to closely enough to show locations. */
 function selectPoint(lngLat, label, corner = false) {
   state.selected = { kind: 'point', lngLat, label, corner };
-  setSelection(circlePolygon(lngLat, RADIUS_M, 72), 'circle');
+  setSelection(circlePolygon(lngLat, RADIUS_M, 72), 'circle', label);
   setPin(lngLat);
   flyToPoint(lngLat);
   refresh();
@@ -462,7 +496,7 @@ async function selectStreet(id) {
     return c;
   });
   const feature = { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: lines } };
-  setSelection(feature, 'line');
+  setSelection(feature, 'line', streetById(id)?.name);
   fitTo(bounds(feature), { maxZoom: 15.5, duration: 1600 });
   refresh();
 }
@@ -483,6 +517,7 @@ function clearSelection() {
 
 function onPick(pick) {
   if (pick.kind === 'precinct') return selectPrecinct(pick.unit);
+  if (pick.kind === 'borough') return selectBorough(pick.code);
   if (pick.kind === 'none') return clearSelection();
   if (pick.kind === 'hex') return selectHex(pick.q, pick.r);
   if (pick.kind === 'point') { const { q, r } = hexAt(pick.lngLat); return selectHex(q, r); }
@@ -783,8 +818,8 @@ const yearsOf = (months) => [...new Set(months.map((m) => 2016 + Math.floor(m / 
 function chartColor() {
   const g = selectionGroup();
   const dark = document.documentElement.dataset.theme === 'dark';
-  if (g) return dark ? GROUP_COLORS[g] : GROUP_RAMPS[g].light[4];
-  return dark ? '#4f9dd6' : '#2468a5';
+  if (g) return GROUP_RAMPS[g][dark ? 'dark' : 'light'][4];
+  return dark ? RAMPS.dark[4] : RAMPS.light[4];
 }
 
 /** Rows {lat, lon, ...} inside a hexagon or a 200 m circle (the SQL box is only a first cut). */
@@ -942,7 +977,7 @@ let pending = 0;
 async function refresh() {
   const ticket = ++pending;
   const compare = comparisonOf(state.period);
-  const [hex, byLt, byCat, previous, byPct] = await Promise.all([
+  const [hex, byLt, byCat, previous, byPct, byBoro] = await Promise.all([
     query(`SELECT q, r, sum(n)::INTEGER AS n FROM hex WHERE ${where()} GROUP BY 1, 2`),
     query(`SELECT lt, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()} GROUP BY 1`),
     query(`SELECT cat, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()} GROUP BY 1`),
@@ -950,10 +985,12 @@ async function refresh() {
       ? query(`SELECT sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where(compare.months)}`)
       : Promise.resolve([{ n: 0 }]),
     precinctGeo ? query(`SELECT pct, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()} GROUP BY 1`) : [],
+    boroughGeo ? query(`SELECT boro, sum(n)::INTEGER AS n FROM agg_precinct WHERE boro BETWEEN 1 AND 5 AND ${where()} GROUP BY 1`) : [],
   ]);
   if (ticket !== pending) return;      // a newer refresh started; drop this one
   setTint(selectionGroup());                      // before both layers, so they change color together
   if (precinctGeo) setPrecincts(new Map(byPct.map((r) => [r.pct, r.n])), precinctMerged());
+  if (boroughGeo) setBoroughs(new Map(byBoro.map((r) => [r.boro, r.n])));
 
   const lt = Object.fromEntries(byLt.map((r) => [r.lt, r.n]));
   const total = (lt[0] ?? 0) + (lt[1] ?? 0) + (lt[2] ?? 0);
@@ -975,7 +1012,8 @@ async function refresh() {
     if (state.selected) panel.querySelector('.block-toggle').expand();
   }
   const noPrecinct = byPct.find((r) => r.pct < 0)?.n ?? 0;
-  renderSummary({ total, precinctOnly: lt[1] ?? 0, none: lt[2] ?? 0, noPrecinct });
+  const noBorough = boroughGeo ? total - byBoro.reduce((t, r) => t + r.n, 0) : 0;
+  renderSummary({ total, precinctOnly: lt[1] ?? 0, none: lt[2] ?? 0, noPrecinct, noBorough });
   renderNotice(state.view === 'precincts' ? { drawable: total, total } : { drawable: lt[0] ?? 0, total });
   document.body.dataset.ready = 'true';
 }
@@ -1015,6 +1053,17 @@ function setupViewSwitch() {
     if (state.view === 'hex') refresh();
   }));
   sync();
+  // In 2D: a switch between precincts and boroughs (same view, one level up or down).
+  const unit = $('.unit-switch');
+  const syncUnit = () => unit.setAttribute('aria-checked', String(state.unit2d === 'borough'));
+  unit.addEventListener('click', () => {
+    state.unit2d = state.unit2d === 'borough' ? 'precinct' : 'borough';
+    savePref('unit2d', state.unit2d);
+    syncUnit();
+    setUnit2d(state.unit2d);
+    refresh();                                      // the summary line names the unit
+  });
+  syncUnit();
 }
 
 // ---------- theme switch (Night / Light), bottom left
@@ -1025,7 +1074,7 @@ function setupThemeSwitch() {
   buttons.forEach((b) => (b.onclick = () => {
     if (document.documentElement.dataset.theme === b.dataset.value) return;
     document.documentElement.dataset.theme = b.dataset.value;
-    savePref('theme', b.dataset.value);
+    savePref('theme:v2', b.dataset.value);
     sync();
     setTheme(b.dataset.value);
   }));
@@ -1046,11 +1095,13 @@ function loadPoints([west, south, east, north]) {
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  const theme = params.get('theme') ?? pref('theme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  // Paper (light) is the default look; Night is a choice the visitor makes, then remembered.
+  const theme = params.get('theme') ?? pref('theme:v2', 'light');
   document.documentElement.dataset.theme = theme;
   setupThemeSwitch();
   setupBlocks();
   state.view = params.get('view') ?? pref('view', 'hex');
+  state.unit2d = pref('unit2d', 'precinct');       // what the 2D view shows: precincts or boroughs
   if (!['hex', 'precincts'].includes(state.view)) state.view = 'hex';
   document.body.dataset.view = state.view;
   setupViewSwitch();
@@ -1115,6 +1166,8 @@ async function main() {
   renderCategories();
   setupCategoryActions();
   if (state.view === 'precincts') await ensurePrecincts();
+  // Map labels are drawn to a canvas atlas once, so the fonts must be ready before the map starts.
+  await Promise.all(['600 16px "Newsreader Variable"', '600 12px "Schibsted Grotesk Variable"'].map((f) => document.fonts.load(f).catch(() => null)));
   const map = await createMap($('#map'), {
     view: state.view,
     theme,
@@ -1123,11 +1176,22 @@ async function main() {
     hooks: { onLegend: renderLegend, loadPoints, onPick },
   });
   setUniverse(cells);
+  loadJson('boroughs.geojson').then((geo) => {
+    boroughGeo ??= geo;
+    setMask(geo);                                   // veil outside NYC
+    setBoroughShapes(geo, meta.boroughs);           // the 2D view by borough
+    if (state.unit2d === 'borough') setUnit2d('borough');
+    refresh();
+  });
   // The details panel ends above the zoom buttons and credits, whatever their size.
   const brControls = document.querySelector('.maplibregl-ctrl-bottom-right');
   const fitPanel = () => document.documentElement.style.setProperty('--controls-br', `${brControls.offsetHeight + 16}px`);
   new ResizeObserver(fitPanel).observe(brControls);
   fitPanel();
+  // Zoom buttons and credits move left of the docked details sheet while it is open.
+  const panelWidth = () => document.documentElement.style.setProperty('--panel-w', `${$('.detail').hidden ? 0 : $('.detail').offsetWidth}px`);
+  new ResizeObserver(panelWidth).observe($('.detail'));
+  new MutationObserver(panelWidth).observe($('.detail'), { attributes: true, attributeFilter: ['hidden'] });
   if (params.has('db')) {                        // test mode only: hooks for headless tests
     window.__nycmap = map;
     window.__hexStats = hexStats;

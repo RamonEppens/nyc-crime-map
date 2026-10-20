@@ -7,7 +7,7 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { ColumnLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer, PathLayer, TextLayer } from '@deck.gl/layers';
-import { basemapStyle } from './basemap.js';
+import { basemapStyle, PAPER } from './basemap.js';
 import { RAMPS, PRECINCT_RAMPS, GROUP_RAMPS, GROUP_COLORS, rgb, classify, quantileBreaks } from './colors.js';
 import { fmt } from './format.js';
 import { setGrid, hexCenter } from './geo.js';
@@ -33,16 +33,23 @@ let hooks = {};
 // interpolate each column's height and color in place (attribute transitions work by index).
 const universe = { cells: [], index: new globalThis.Map() };
 const state = { hexes: [], maxN: 1, breaks: [], label: '', points: [], pointsBox: null, selection: null,
-  view: 'hex', mix: 0, precinctBreaks: [] };
+  view: 'hex', mix: 0, precinctBreaks: [], unit2d: 'precinct', unitMix: 0 };
 // Precincts: features loaded once in a fixed order (79: 78 precincts + the merged 105/113/116 area
 // used for periods before the 116th existed). Polygons and outlines are flattened once, so color
 // changes interpolate in place like the hexagons; each filter only rewrites `units[i].n / shown`.
 const precincts = { units: [], polygons: [], paths: [], version: 0 };
+// Boroughs: the same 2D view one level up (5 areas). `unit2d` says which set the 2D view shows;
+// `unitMix` cross-fades between them (0 = precincts, 1 = boroughs).
+const boroughs = { units: [], polygons: [], paths: [], version: 0, breaks: [] };
+const BOROUGH_LABELS = {                          // hand-placed: the visual middle of each borough
+  1: [-73.966, 40.783], 2: [-73.876, 40.850], 3: [-73.945, 40.650], 4: [-73.815, 40.712], 5: [-74.145, 40.585],
+};
 const key = (q, r) => q * 10000 + r;
 // Offense group whose color the hexagons and precincts take (null = the usual blue).
 let tint = null;
 const hexRamp = () => (tint ? GROUP_RAMPS[tint][theme] : RAMPS[theme]);
 const precinctRamp = () => (tint ? GROUP_RAMPS[tint].light : PRECINCT_RAMPS[theme]);
+const boroughRamp = () => [0, 2, 3, 4, 5].map((i) => precinctRamp()[i]);   // 5 shades, palest to deepest
 const easeOutCubic = (t) => 1 - (1 - t) ** 3;
 
 const smoothstep = (a, b, x) => {
@@ -58,7 +65,7 @@ export async function createMap(container, opts) {
   hooks = opts.hooks;
   map = new Map({
     container,
-    style: basemapStyle(theme),
+    style: await basemapStyle(theme),
     ...(state.view === 'precincts' ? VIEW_2D : VIEW),
     maxBounds: PAN_LIMITS,
     maxPitch: 70,
@@ -73,12 +80,14 @@ export async function createMap(container, opts) {
   for (const type of ['dragstart', 'wheel', 'rotatestart', 'pitchstart']) {
     map.on(type, (e) => { if (e.originalEvent) stopFollow(); });   // only the user's own moves
   }
+  map.on('style.load', addMask);                  // every basemap swap drops custom layers
   map.on('zoom', render);                         // keeps the column/point transition smooth
   // Clicks: a hexagon column or a location dot selects that hexagon; elsewhere, the neighborhood.
   map.on('click', (e) => {
-    const picked = overlay.pickObject({ x: e.point.x, y: e.point.y, radius: 3, layerIds: ['hex', 'points', 'precincts'] });
+    const picked = overlay.pickObject({ x: e.point.x, y: e.point.y, radius: 3, layerIds: ['hex', 'points', 'precincts', 'boroughs'] });
     const lngLat = [e.lngLat.lng, e.lngLat.lat];
     if (picked?.layer.id === 'precincts') hooks.onPick?.({ kind: 'precinct', unit: precincts.units[picked.object.u].props });
+    else if (picked?.layer.id === 'boroughs') hooks.onPick?.({ kind: 'borough', code: boroughs.units[picked.object.u].props.boro });
     else if (state.view === 'precincts') hooks.onPick?.({ kind: 'none' });
     else if (picked?.layer.id === 'hex' && picked.object.n > 0) hooks.onPick?.({ kind: 'hex', q: picked.object.q, r: picked.object.r });
     else if (picked?.layer.id === 'points') hooks.onPick?.({ kind: 'point', lngLat: [picked.object.lon, picked.object.lat] });
@@ -95,11 +104,39 @@ export async function createMap(container, opts) {
   return map;
 }
 
-export function setTheme(next) {
+export async function setTheme(next) {
   theme = next;
-  map.setStyle(basemapStyle(theme), { diff: false });
+  map.setStyle(await basemapStyle(theme), { diff: false });
   updateBreaks();
   render();
+}
+
+// ---------- outside New York City: the basemap is veiled with paper, so New Jersey, Westchester and
+// Long Island stay as context but the five boroughs read first (their labels too).
+let maskGeo = null;
+/** The five boroughs (GeoJSON); builds the veil: a world rectangle with the boroughs as holes. */
+export function setMask(boroughs) {
+  const area = (ring) => ring.reduce((a, [x1, y1], i) => { const [x2, y2] = ring[(i + 1) % ring.length]; return a + (x1 * y2 - x2 * y1); }, 0);
+  const outer = [[-80, 35], [-68, 35], [-68, 46], [-80, 46], [-80, 35]];
+  const sign = Math.sign(area(outer));
+  const holes = [];
+  for (const f of boroughs.features) {
+    const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    for (const poly of polys) {
+      const ring = poly[0];
+      holes.push(Math.sign(area(ring)) === sign ? [...ring].reverse() : ring);
+    }
+  }
+  maskGeo = { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [outer, ...holes] } };
+  addMask();
+}
+function addMask() {
+  if (!maskGeo || !map || !map.isStyleLoaded()) return;   // 'style.load' calls again
+  if (map.getLayer('outside-nyc')) map.removeLayer('outside-nyc');
+  if (map.getSource('outside-nyc')) map.removeSource('outside-nyc');
+  map.addSource('outside-nyc', { type: 'geojson', data: maskGeo });
+  map.addLayer({ id: 'outside-nyc', type: 'fill', source: 'outside-nyc',
+    paint: { 'fill-color': PAPER[theme], 'fill-opacity': theme === 'dark' ? 0.62 : 0.66 } });
 }
 
 /** Precinct boundaries (GeoJSON FeatureCollection). Call once. */
@@ -133,9 +170,51 @@ export function setPrecincts(counts, merged) {
   const breaks = quantileBreaks(precincts.units.filter((x) => x.shown).map((x) => x.n));
   for (let i = 1; i < breaks.length; i++) if (breaks[i] <= breaks[i - 1]) breaks[i] = breaks[i - 1] + 1;
   state.precinctBreaks = breaks;
-  if (state.view === 'precincts') hooks.onLegend?.(precinctRamp(), breaks, 'precinct');
+  if (state.view === 'precincts' && state.unit2d === 'precinct') hooks.onLegend?.(precinctRamp(), breaks, 'precinct');
   render();
 }
+
+/** Borough boundaries (GeoJSON with properties.boro 1-5) and their names by code. Call once. */
+export function setBoroughShapes(geo, names) {
+  boroughs.units = geo.features.map((f) => ({
+    props: { ...f.properties, name: names[f.properties.boro], label: BOROUGH_LABELS[f.properties.boro] }, n: 0, shown: true }));
+  boroughs.polygons = [];
+  boroughs.paths = [];
+  geo.features.forEach((f, u) => {
+    const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    for (const rings of polys) {
+      boroughs.polygons.push({ u, polygon: rings });
+      for (const ring of rings) boroughs.paths.push({ u, path: ring });
+    }
+  });
+}
+/** counts: Map boro (1-5) -> n. Five areas get five classes: each borough its own shade, by rank. */
+export function setBoroughs(counts) {
+  for (const unit of boroughs.units) unit.n = counts.get(unit.props.boro) ?? 0;
+  boroughs.version++;
+  const breaks = quantileBreaks(boroughs.units.map((x) => x.n), 5);
+  for (let i = 1; i < breaks.length; i++) if (breaks[i] <= breaks[i - 1]) breaks[i] = breaks[i - 1] + 1;
+  boroughs.breaks = breaks;
+  if (state.view === 'precincts' && state.unit2d === 'borough') hooks.onLegend?.(boroughRamp(), breaks, 'borough');
+  render();
+}
+/** 'precinct' or 'borough': which areas the 2D view shows (cross-fade). */
+export function setUnit2d(unit) {
+  if (unit === state.unit2d) return;
+  state.unit2d = unit;
+  const from = state.unitMix;
+  const to = unit === 'borough' ? 1 : 0;
+  const start = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / 500);
+    state.unitMix = from + (to - from) * (1 - (1 - t) ** 3);
+    render();
+    if (t < 1 && state.unit2d === unit) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+  updateBreaks();
+}
+export const unit2d = () => state.unit2d;
 
 /** Unit shown for a precinct number right now (the merged area when it applies), or null. */
 export function precinctUnit(pct) {
@@ -212,16 +291,31 @@ export function setTint(group) {
 /** What is selected, drawn in brand green over everything else (depthCompare: always):
  *  style 'outline' (hexagon), 'area' (outline + light fill), 'circle' (200 m radius, light fill),
  *  'line' (a whole street, 5 px with round ends). */
-export function setSelection(feature, style = 'outline') {
+export function setSelection(feature, style = 'outline', label = null) {
   state.selection = feature;
   state.selectionStyle = style;
+  state.selectionLabel = feature && label ? { text: label, position: labelPoint(feature, style) } : null;
   state.highlight = null;
   stopFollow();
   render();
 }
 
+// Where the name of the selection is written on the map: above a circle or hexagon, at the middle
+// vertex of a street, at the visual middle (bounding-box center) of an area.
+function labelPoint(feature, style) {
+  const g = feature.geometry;
+  if (g.type === 'MultiLineString') {
+    const lines = g.coordinates;
+    const longest = lines.reduce((a, b) => (b.length > a.length ? b : a), lines[0]);
+    return longest[Math.floor(longest.length / 2)];
+  }
+  let w = 180, s = 90, e = -180, n = -90;
+  const walk = (c) => (typeof c[0] === 'number' ? (w = Math.min(w, c[0]), e = Math.max(e, c[0]), s = Math.min(s, c[1]), n = Math.max(n, c[1])) : c.forEach(walk));
+  walk(g.coordinates);
+  return style === 'circle' || style === 'outline' ? [(w + e) / 2, n] : [(w + e) / 2, (s + n) / 2];
+}
 const isArea = (f) => /Polygon/.test(f?.geometry?.type ?? '');
-const highlightRgb = (alpha) => [...(theme === 'dark' ? [255, 214, 102] : [230, 120, 20]), alpha];
+const HIGHLIGHTER = [255, 205, 40];             // highlighter-pen yellow (#FFCD28)
 
 /** One block of the selected street, lit while the pointer is over it in a chart (null = none). */
 export function setHighlight(feature) {
@@ -327,8 +421,9 @@ export function hexStats() {
 
 /** Quantile breaks over the hexagons currently in view; the legend is updated to match. */
 function updateBreaks() {
-  if (state.view === 'precincts') {                // precinct classes do not depend on the viewport
-    hooks.onLegend?.(precinctRamp(), state.precinctBreaks, 'precinct');
+  if (state.view === 'precincts') {                // 2D classes do not depend on the viewport
+    if (state.unit2d === 'borough') hooks.onLegend?.(boroughRamp(), boroughs.breaks, 'borough');
+    else hooks.onLegend?.(precinctRamp(), state.precinctBreaks, 'precinct');
     return;
   }
   const b = map.getBounds();
@@ -399,7 +494,7 @@ function render() {
     getRadius: (d) => Math.min(9, 1.6 + 0.55 * Math.sqrt(d.n)),   // area grows with the count
     getFillColor: (d) => rgb(GROUP_COLORS[categories[d.cat]?.group ?? 'other']),
     stroked: true,
-    getLineColor: theme === 'dark' ? [14, 14, 14] : [255, 255, 255],
+    getLineColor: theme === 'dark' ? [17, 20, 23] : [244, 245, 242],
     lineWidthUnits: 'pixels',
     getLineWidth: 1,
     opacity: 0.9 * m * k,
@@ -407,21 +502,21 @@ function render() {
     pickable: m >= 0.5 && k > 0.5,
     parameters: { depthCompare: 'always' },   // drawn over the sinking columns, never hidden by them
   });
-  // Selection: fluorescent green (the brand hue pushed to neon) with a soft glow underneath, so a
-  // street or a circle stands out over columns, dots and either basemap. A slightly deeper neon on
-  // the light basemap keeps it visible on white.
+  // Selection: an ink line with a paper casing underneath, the way cartographers draw a route over
+  // a busy map. Readable over pale and deep columns alike, and it never glows. Night inverts it.
   const style = state.selectionStyle;
-  const neon = theme === 'dark' ? [57, 255, 136] : [0, 214, 104];
-  const width = style === 'line' ? 3 : 1.75;
+  const ink = theme === 'dark' ? [244, 245, 242] : [16, 23, 31];
+  const casingRgb = theme === 'dark' ? [17, 20, 23] : [244, 245, 242];
+  const width = style === 'line' ? 3 : 2;
   const selData = state.selection ? [state.selection] : [];
-  const glow = new GeoJsonLayer({
-    id: 'selection-glow',
+  const casing = new GeoJsonLayer({
+    id: 'selection-casing',
     data: selData,
     stroked: true,
     filled: false,
-    getLineColor: [...neon, theme === 'dark' ? 50 : 42],
+    getLineColor: [...casingRgb, 235],
     lineWidthUnits: 'pixels',
-    getLineWidth: width + 5,
+    getLineWidth: width + 4,
     lineCapRounded: true,
     lineJointRounded: true,
     parameters: { depthCompare: 'always' },
@@ -432,8 +527,8 @@ function render() {
     data: selData,
     stroked: true,
     filled: style === 'area' || style === 'circle',
-    getFillColor: [...neon, style === 'circle' ? 40 : 26],
-    getLineColor: [...neon, 255],
+    getFillColor: [...ink, style === 'circle' ? 22 : 14],
+    getLineColor: [...ink, 255],
     lineWidthUnits: 'pixels',
     getLineWidth: width,
     lineCapRounded: true,
@@ -441,30 +536,67 @@ function render() {
     parameters: { depthCompare: 'always' },
     updateTriggers: { getFillColor: [style, theme], getLineColor: theme, getLineWidth: style },
   });
-  // Highlight: one block of the street, in the warm complement of the blue data (yellow at night,
-  // orange by day, where yellow has no contrast), 9 px, on top of everything.
-  const highlight = state.highlight && new GeoJsonLayer({
-    id: 'highlight',
-    data: [state.highlight],
-    // A block is a thick 9 px stroke; a neighborhood is a 4 px outline with a faint fill of the
-    // same warm color, so the area reads as a shape without hiding the columns inside it.
+  // Highlight (hovering a block or neighborhood in a chart): a highlighter-pen yellow with an ink
+  // edge, on top of everything. Yellow is used nowhere else, so it always means "this one".
+  const hl = state.highlight;
+  const area = isArea(hl);
+  const highlightEdge = hl && new GeoJsonLayer({
+    id: 'highlight-edge',
+    data: [hl],
     stroked: true,
-    filled: isArea(state.highlight),
-    getLineColor: highlightRgb(255),
-    getFillColor: highlightRgb(46),
+    filled: false,
+    getLineColor: [...ink, 230],
     lineWidthUnits: 'pixels',
-    getLineWidth: isArea(state.highlight) ? 4 : 9,
-    lineWidthMinPixels: isArea(state.highlight) ? 4 : 9,
+    getLineWidth: area ? 5 : 11,
     lineCapRounded: true,
     lineJointRounded: true,
     parameters: { depthCompare: 'always' },
-    updateTriggers: { getLineColor: theme, getFillColor: theme, getLineWidth: state.highlight },
+    updateTriggers: { getLineColor: theme, getLineWidth: hl },
   });
-  overlay.setProps({ layers: [columns, points, ...precinctLayers(), glow, outline, highlight].filter(Boolean) });
+  const highlight = hl && new GeoJsonLayer({
+    id: 'highlight',
+    data: [hl],
+    stroked: true,
+    filled: area,
+    getLineColor: [...HIGHLIGHTER, 255],
+    getFillColor: [...HIGHLIGHTER, 70],
+    lineWidthUnits: 'pixels',
+    getLineWidth: area ? 3 : 8,
+    lineWidthMinPixels: area ? 3 : 8,
+    lineCapRounded: true,
+    lineJointRounded: true,
+    parameters: { depthCompare: 'always' },
+    updateTriggers: { getLineWidth: hl },
+  });
+  // The selection's name, set on the map in the headline serif, like a label on a printed map.
+  const label = state.selectionLabel && new TextLayer({
+    id: 'selection-label',
+    data: [state.selectionLabel],
+    getPosition: (d) => d.position,
+    getText: (d) => d.text,
+    getSize: 15,
+    fontFamily: '"Newsreader Variable", Georgia, serif',
+    fontWeight: 600,
+    characterSet: 'auto',
+    fontSettings: { sdf: false, fontSize: 48 },
+    background: true,                              // a paper slip, like a label pasted on the map
+    getBackgroundColor: [...casingRgb, 238],
+    backgroundPadding: [6, 2, 6, 3],
+    getColor: [...ink, 255],
+    getPixelOffset: state.selectionStyle === 'circle' || state.selectionStyle === 'outline' ? [0, -12] : [0, 0],
+    getTextAnchor: 'middle',
+    getAlignmentBaseline: state.selectionStyle === 'circle' || state.selectionStyle === 'outline' ? 'bottom' : 'center',
+    parameters: { depthCompare: 'always' },
+    updateTriggers: { getColor: theme, getBackgroundColor: theme, getPixelOffset: state.selectionStyle },
+  });
+  overlay.setProps({ layers: [columns, points, ...precinctLayers(), casing, outline, label, highlightEdge, highlight].filter(Boolean) });
 }
 
 function precinctLayers() {
-  const mix = state.mix;
+  return [...precinctSet(state.mix * (1 - state.unitMix)), ...boroughSet(state.mix * state.unitMix)];
+}
+
+function precinctSet(mix) {
   if (mix <= 0 || !precincts.units.length) return [];
   const ramp = precinctRamp().map(rgb);
   const { units, version } = precincts;
@@ -485,7 +617,7 @@ function precinctLayers() {
     id: 'precinct-borders',
     data: precincts.paths,
     getPath: (d) => d.path,
-    getColor: (d) => (units[d.u].shown ? (theme === 'dark' ? [12, 12, 12, 255] : [255, 255, 255, 255]) : [0, 0, 0, 0]),
+    getColor: (d) => (units[d.u].shown ? (theme === 'dark' ? [17, 20, 23, 255] : [244, 245, 242, 255]) : [0, 0, 0, 0]),
     widthUnits: 'pixels',
     getWidth: 1.2,
     opacity: mix,
@@ -497,18 +629,55 @@ function precinctLayers() {
     getPosition: (d) => d.props.label,
     getText: (d) => (d.props.merged ? d.props.merged.join('·') : String(d.props.pct)),
     getSize: 11,
-    fontFamily: '"Public Sans", system-ui, sans-serif',
+    fontFamily: '"Schibsted Grotesk Variable", system-ui, sans-serif',
     fontWeight: 600,
     characterSet: '0123456789·',
     fontSettings: { sdf: true },
-    outlineWidth: 2,
-    outlineColor: theme === 'dark' ? [12, 12, 12, 220] : [255, 255, 255, 220],
-    getColor: theme === 'dark' ? [235, 235, 235, 255] : [20, 30, 42, 255],
+    // Numbers in ink on pale fills, in paper on the three deepest classes (no halo needed).
+    getColor: (d) => (classify(d.n, state.precinctBreaks) >= 3 ? [244, 245, 242, 255] : [16, 23, 31, 255]),
     opacity: mix,
     visible: map.getZoom() >= 10.3,
-    updateTriggers: { getText: version },
+    updateTriggers: { getText: version, getColor: triggers },
   });
   return [fills, borders, labels];
+}
+
+/** The five boroughs: same look as the precincts, with the name and the count written inside. */
+function boroughSet(mix) {
+  if (mix <= 0 || !boroughs.units.length) return [];
+  const ramp = boroughRamp().map(rgb);
+  const { units, version, breaks } = boroughs;
+  const triggers = `${version}|${breaks.join(',')}|${theme}|${tint}`;
+  const fills = new SolidPolygonLayer({
+    id: 'boroughs',
+    data: boroughs.polygons,
+    getPolygon: (d) => d.polygon,
+    getFillColor: (d) => [...ramp[classify(units[d.u].n, breaks)], 225],
+    opacity: mix,
+    pickable: mix > 0.5,
+    autoHighlight: true,
+    highlightColor: [255, 255, 255, 50],
+    transitions: { getFillColor: { duration: 450 } },
+    updateTriggers: { getFillColor: triggers },
+  });
+  // No outlines: the borough file is a union of many pieces whose shared edges would show as
+  // stray lines; boroughs are told apart by their fills and the water between them.
+  const labels = new TextLayer({
+    id: 'borough-labels',
+    data: units,
+    getPosition: (d) => d.props.label,
+    getText: (d) => `${d.props.name}\n${fmt(d.n)}`,
+    getSize: 13,
+    lineHeight: 1.25,
+    fontFamily: '"Schibsted Grotesk Variable", system-ui, sans-serif',
+    fontWeight: 600,
+    characterSet: 'auto',
+    fontSettings: { sdf: true },
+    getColor: (d) => (classify(d.n, breaks) >= 2 ? [244, 245, 242, 255] : [16, 23, 31, 255]),
+    opacity: mix,
+    updateTriggers: { getText: version, getColor: triggers },
+  });
+  return [fills, labels];
 }
 
 export const precinctName = (props) => (props.merged
@@ -525,6 +694,11 @@ function tooltip({ object, layer }) {
     const unit = precincts.units[object.u];
     return { className: 'deck-tooltip',
       html: `<strong>${precinctName(unit.props)}</strong><br>${fmt(unit.n)} complaint${unit.n === 1 ? '' : 's'} in ${state.label}<span class="tip-hint">Click for details</span>` };
+  }
+  if (layer?.id === 'boroughs' && object) {
+    const unit = boroughs.units[object.u];
+    return { className: 'deck-tooltip',
+      html: `<strong>${unit.props.name}</strong><br>${fmt(unit.n)} complaint${unit.n === 1 ? '' : 's'} in ${state.label}<span class="tip-hint">Click for details</span>` };
   }
   if (!object || !object.n) return null;
   if (layer.id === 'hex') {
