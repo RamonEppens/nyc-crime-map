@@ -72,3 +72,50 @@ Each entry: what was decided, why, and when. Newest last.
 | 66 | 2026-10-19 | Left sheet holds only data choices: masthead with the two-sentence summary (kept: the "no location" count matters), search, Dates on one row (mode and value side by side; a year range is "[2016] to [2025]"), Offenses. Offenses: each group title is a checkbox for the whole group (checked / unchecked / mixed), its types in two aligned columns underneath, so the eye scans straight down; all 18 fit without scrolling even at 768 px. Four short names for the columns (full name on hover and everywhere else): "Assault, misd.", "Other, persons", "Traffic & DUI", "Public order". "All / Clear" moved to the Offenses header; the † note is one line under the list. The key moved onto the map (bottom left, one compact box; its explanation in a "?" tooltip) and the display switches (3D / 2D, Precincts / Boroughs, Day / Night) to a box at the top right of the map. | Ramón found the sheet too full and the offense list messy. A key belongs next to what it explains (fewer eye jumps); how the map is drawn is a different question from what data it shows, so they are separated; aligned columns and group-level choices cut scanning and decision time (4 choices before 18). |
 | 67 | 2026-10-20 | Load speed. (1) DuckDB-WASM 1.32 defaults to full HTTP reads, so every Parquet file (~90 MB) was downloaded whole before the map appeared; now `forceFullHTTPReads: false`, `reliableHeadRequests: true`, `allowFullHTTPReads: false`, so it reads only the pieces a query needs (startup data ~6.5 MB). (2) The map, basemap and controls come up while the engine downloads; queries wait for it on their own. (3) The large remote tables are opened only after the first map. (4) The Parquet extension downloads in parallel with the engine. (5) A start cache, `data/web/start.json` (~50 KB gzipped, built by `npm run build:start-cache` from the test SQL server), holds the answers to the first-load queries (default dates, all offenses, 3D and 2D), so the first map is drawn without the engine; it is ignored if meta.json has changed, and the page asks the engine again once it is ready. While the engine is still loading, a new filter shows "Loading the full data to apply this…". Measured on a simulated 25 Mbps / 60 ms connection, first visit: first map 49 s → 2.5 s; first filter answered ~21 s (the 34 MB engine; cached on later visits). | Ramón: the published preview took too long to show anything. |
 | 68 | 2026-10-20 | Redesign phase 1, encoding (brief "cartography principles and UX laws"). (1) Stable color breaks: hexagon classes are computed once per filter over every hexagon in the city (6 classes), not over the viewport, and rounded to friendly numbers (…1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10…) while staying roughly equal-count; same for precincts and boroughs. (2) The key shows the class ranges ("1–8, 9–15, … 151+") and a title with measure, unit, selection and period ("Complaints per hexagon (180 m), robbery, 2025"); its "?" explains how classes are set. (3) 2D precincts show complaints per 1,000 residents a year (2020 Census blocks); precincts with fewer than 2,000 residents are hatched and labelled "Few residents", not rated. (4) Boroughs use the precinct rate and the same city-wide classes, with the value written on each ("Bronx · 41.2 per 1,000", serif with a halo in the land color). (5) One density hue: the per-group recoloring of hexagons, precincts and charts is gone; group colors are only for points and the offense list. (6) Default tilt 35° (was 45°), columns at 60% of the old maximum height; phones start flat. (7) Point tooltip says what a point is ("12 complaints recorded at this location in 2025 · locations are rounded by the NYPD"). | Visual contrast and figure–ground (a color must mean the same thing wherever you pan; the data, not the viewport, sets the classes); legibility (numbers in the key, halo on labels); Tesler's law (the map carries the complexity: rates, caveats and classes are computed and explained, not left to the reader); visual hierarchy (tall columns were hiding the hexagons behind them). Rates per resident because counts mostly measure size. |
+| 69 | 2026-10-20 | Redesign phase 2, color (brief §4; supersedes the color parts of #41, #44, #53, #56, #64). (1) Density in plum (OKLCH hue 330, even lightness steps): light map few → many `#f3ddf0 #dcb1d7 #c287bc #a15e9c #7c3b77 #532150`, dark map `#512f4f #7a4475 #a15e9c #c57fbf #e3a6dd #facef4`; hexagons and charts use the theme's ramp, precinct and borough fills the light ramp in both themes. (2) Offense groups (points and the offense list only): persons `#b45248`, property `#046f87`, enforcement `#a97416`, other `#868686`; points keep a 1 px casing in the land color. (3) Every other color the map draws is now one of the neutral tokens of styles.css (paper, ink, sheet-2/3, muted) or the highlighter: the white hover tint, the off-token "few residents" fill and a dark ink that was 3 units off the token are gone; deck.gl reads them from one `TOKENS` table in map.js. No CSS color outside the tokens remained. (4) `pipeline/scripts/color_check.py` (run with `uv run --with colorspacious pipeline/scripts/color_check.py`) reads colors.js, styles.css and basemap.js and prints contrast and color-blind distances; its output is in the appendix "Color check, #69" at the end of this file. Known gaps, kept on purpose and handled elsewhere: the two palest ramp classes are under 3:1 against paper (a sequential ramp has to start near the background; they are told apart by ΔE ≥ 15 from water and land, the numeric key and the tooltip), and --rule-strong is 1.7:1, so control borders that must reach 3:1 use --muted (phase 4/7). The basemap's own water and land tones are unchanged. | Visual contrast (lightness first: even OKLCH steps; the old navy's palest class was ΔE 4.3 from water, now 15.9) and figure–ground (data hue shared with nothing else: not water, parks, alarm or the interface ink); color is never the only signal (minimum CVD distance 11 CAM02-UCS, was 7.5 under protan). |
+
+## Appendix: color check, #69
+
+Output of `pipeline/scripts/color_check.py` on 2026-10-20.
+
+### Data ramp (hexagons: theme ramp; precincts and boroughs: light ramp in both themes)
+
+| Class | Light | vs paper | Dark | vs night |
+|---|---|---|---|---|
+| 1 | `#f3ddf0` | 1.2:1 | `#512f4f` | 1.6:1 |
+| 2 | `#dcb1d7` | 1.7:1 | `#7a4475` | 2.6:1 |
+| 3 | `#c287bc` | 2.6:1 | `#a15e9c` | 4.0:1 |
+| 4 | `#a15e9c` | 4.2:1 | `#c57fbf` | 6.3:1 |
+| 5 | `#7c3b77` | 7.0:1 | `#e3a6dd` | 9.5:1 |
+| 6 | `#532150` | 11.3:1 | `#facef4` | 13.4:1 |
+
+Lowest light class vs water ΔE2000 = 15.9, vs paper = 15.3; lowest dark class vs night land ΔE2000 = 22.5, vs night water = 23.3.
+
+### Offense groups (points and the offense list)
+
+| Group | Color | vs paper | vs night |
+|---|---|---|---|
+| person | `#b45248` | 4.5:1 | 3.7:1 |
+| property | `#046f87` | 5.3:1 | 3.2:1 |
+| enforcement | `#a97416` | 3.7:1 | 4.6:1 |
+| other | `#868686` | 3.3:1 | 5.1:1 |
+
+| Pair | normal | deutan | protan | tritan |
+|---|---|---|---|---|
+| person / property | 48.2 | 34.1 | 24.4 | 52.6 |
+| person / enforcement | 21.2 | 11.0 | 18.1 | 11.2 |
+| person / other | 28.0 | 17.0 | 17.9 | 33.4 |
+| property / enforcement | 47.3 | 44.8 | 40.2 | 43.7 |
+| property / other | 25.5 | 22.9 | 17.3 | 23.3 |
+| enforcement / other | 26.7 | 25.9 | 27.4 | 22.9 |
+
+Minimum pairwise CAM02-UCS ΔE (all conditions): 11.0
+
+### Interface tokens
+
+| Token | Light | on sheet | Dark | on sheet |
+|---|---|---|---|---|
+| --ink | `#10171f` | 17.4:1 | `#eceeea` | 15.1:1 |
+| --muted | `#586069` | 6.2:1 | `#a0a7ae` | 7.3:1 |
+| --rule-strong | `#c2c6c0` | 1.7:1 | `#3a4047` | 1.7:1 |
+| --highlighter | `#ffcd28` | 1.4:1 on paper (always drawn with an ink casing: ink vs highlighter 12.0:1) | | |

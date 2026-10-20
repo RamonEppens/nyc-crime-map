@@ -9,7 +9,7 @@ import {
 } from './map.js';
 import { hexAt, hexCenter, hexPolygon, featureAt, meters, circlePolygon, bounds, degLat, degLon } from './geo.js';
 import { setupSearch, loadStreets, streetById } from './search.js';
-import { GROUP_COLORS, GROUP_LABELS, GROUP_RAMPS, RAMPS } from './colors.js';
+import { GROUP_COLORS, GROUP_LABELS, RAMPS } from './colors.js';
 import { buildReport } from './report.js';
 import { fmt, fmtCompact, fmtChange, fmtShort } from './format.js';
 import {

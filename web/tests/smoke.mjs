@@ -10,8 +10,8 @@ const base = process.argv[2] ?? 'http://localhost:5173/';
 const sql = process.argv[3] ?? 'http://localhost:8765';
 const out = process.argv[4] ?? 'tests/screens';
 const RAMPS = {
-  dark: ['#27364a', '#405369', '#5b728b', '#7692ad', '#93b3d1', '#b1d6f6'],
-  light: ['#d5e3f2', '#a7b9cf', '#7b91ad', '#526a8c', '#2d456c', '#0b214c'],
+  dark: ['#512f4f', '#7a4475', '#a15e9c', '#c57fbf', '#e3a6dd', '#facef4'],
+  light: ['#f3ddf0', '#dcb1d7', '#c287bc', '#a15e9c', '#7c3b77', '#532150'],
 };
 const hex = (rgbStr) => '#' + rgbStr.match(/\d+/g).slice(0, 3).map((v) => (+v).toString(16).padStart(2, '0')).join('');
 
@@ -117,7 +117,7 @@ for (const theme of ['dark', 'light']) {
   if ((await first()) !== total2025) errors.push(`${theme}: All should restore ${total2025}`);
   await page.waitForTimeout(500);
   const blue = (await page.$$eval('.legend-ramp span', (els) => els.map((e) => getComputedStyle(e).backgroundColor))).map(hex);
-  if (JSON.stringify(blue) !== JSON.stringify(RAMPS[theme])) errors.push(`${theme}: All should bring back the ink ramp`);
+  if (JSON.stringify(blue) !== JSON.stringify(RAMPS[theme])) errors.push(`${theme}: All should bring back the plum ramp`);
   await page.click('[data-block="period"] .block-toggle');
   if (await page.isVisible('#period-body')) errors.push(`${theme}: Hide did not hide the date block`);
   await page.click('[data-block="period"] .block-toggle');

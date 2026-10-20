@@ -323,6 +323,14 @@ function labelPoint(feature, style) {
 }
 const isArea = (f) => /Polygon/.test(f?.geometry?.type ?? '');
 const HIGHLIGHTER = [255, 205, 40];             // highlighter-pen yellow (#FFCD28)
+// Neutral tokens (same values as styles.css), as RGB for deck.gl.
+const TOKENS = {
+  paper: { light: [244, 245, 242], dark: [17, 20, 23] },     // --paper (map land)
+  ink: { light: [16, 23, 31], dark: [236, 238, 234] },       // --ink
+  sheet2: { light: [239, 240, 236], dark: [41, 46, 51] },    // --sheet-2 / dark --sheet-3
+  muted: { light: [88, 96, 105], dark: [160, 167, 174] },    // --muted
+};
+const tk = (name) => TOKENS[name][theme];
 
 /** One block of the selected street, lit while the pointer is over it in a chart (null = none). */
 export function setHighlight(feature) {
@@ -479,7 +487,7 @@ function render() {
     visible: m < 1 && k > 0,
     pickable: m < 0.5 && k > 0.5,
     autoHighlight: true,
-    highlightColor: [255, 255, 255, 60],
+    highlightColor: [...TOKENS.paper.light, 70],
     transitions: {
       getElevation: { duration: 700, easing: easeOutCubic },
       getFillColor: { duration: 450 },
@@ -494,7 +502,7 @@ function render() {
     getRadius: (d) => Math.min(9, 1.6 + 0.55 * Math.sqrt(d.n)),   // area grows with the count
     getFillColor: (d) => rgb(GROUP_COLORS[categories[d.cat]?.group ?? 'other']),
     stroked: true,
-    getLineColor: theme === 'dark' ? [17, 20, 23] : [244, 245, 242],
+    getLineColor: tk('paper'),                       // 1 px casing in the land color
     lineWidthUnits: 'pixels',
     getLineWidth: 1,
     opacity: 0.9 * m * k,
@@ -505,8 +513,8 @@ function render() {
   // Selection: an ink line with a paper casing underneath, the way cartographers draw a route over
   // a busy map. Readable over pale and deep columns alike, and it never glows. Night inverts it.
   const style = state.selectionStyle;
-  const ink = theme === 'dark' ? [244, 245, 242] : [16, 23, 31];
-  const casingRgb = theme === 'dark' ? [17, 20, 23] : [244, 245, 242];
+  const ink = tk('ink');
+  const casingRgb = tk('paper');
   const width = style === 'line' ? 3 : 2;
   const selData = state.selection ? [state.selection] : [];
   const casing = new GeoJsonLayer({
@@ -601,7 +609,7 @@ function precinctSet(mix) {
   const ramp = precinctRamp().map(rgb);
   const { units, version } = precincts;
   const triggers = `${version}|${state.precinctBreaks.join(',')}|${theme}`;
-  const fewFill = theme === 'dark' ? [42, 46, 51, 235] : [233, 235, 230, 235];
+  const fewFill = [...tk('sheet2'), 235];
   const fills = new SolidPolygonLayer({
     id: 'precincts',
     data: precincts.polygons,
@@ -614,7 +622,7 @@ function precinctSet(mix) {
     opacity: mix,
     pickable: mix > 0.5,
     autoHighlight: true,
-    highlightColor: [255, 255, 255, 50],
+    highlightColor: [...TOKENS.paper.light, 60],
     transitions: { getFillColor: { duration: 450 } },
     updateTriggers: { getFillColor: triggers },
   });
@@ -622,7 +630,7 @@ function precinctSet(mix) {
     id: 'precinct-borders',
     data: precincts.paths,
     getPath: (d) => d.path,
-    getColor: (d) => (units[d.u].shown ? (theme === 'dark' ? [17, 20, 23, 255] : [244, 245, 242, 255]) : [0, 0, 0, 0]),
+    getColor: (d) => (units[d.u].shown ? [...tk('paper'), 255] : [0, 0, 0, 0]),
     widthUnits: 'pixels',
     getWidth: 1.2,
     opacity: mix,
@@ -634,7 +642,7 @@ function precinctSet(mix) {
     id: 'precinct-few',
     data: hatchLines(),
     getPath: (d) => d,
-    getColor: theme === 'dark' ? [160, 167, 174, 200] : [88, 96, 105, 170],
+    getColor: [...tk('muted'), theme === 'dark' ? 200 : 170],
     widthUnits: 'pixels',
     getWidth: 1.2,
     opacity: mix,
@@ -652,7 +660,7 @@ function precinctSet(mix) {
     lineHeight: 1.2,
     fontSettings: { sdf: true },
     // Numbers in ink on pale fills, in paper on the three deepest classes (no halo needed).
-    getColor: (d) => (!d.few && classify(d.rate, state.precinctBreaks) >= 3 ? [244, 245, 242, 255] : [16, 23, 31, 255]),
+    getColor: (d) => (!d.few && classify(d.rate, state.precinctBreaks) >= 3 ? [...TOKENS.paper.light, 255] : [...TOKENS.ink.light, 255]),
     opacity: mix,
     visible: map.getZoom() >= 10.3,
     updateTriggers: { getText: version, getColor: triggers },
@@ -670,8 +678,8 @@ function precinctSet(mix) {
     characterSet: 'auto',
     fontSettings: { sdf: true, fontSize: 64, buffer: 8 },
     outlineWidth: 3,
-    outlineColor: theme === 'dark' ? [17, 20, 23, 255] : [244, 245, 242, 255],
-    getColor: theme === 'dark' ? [236, 238, 241, 255] : [16, 23, 31, 255],
+    outlineColor: [...tk('paper'), 255],
+    getColor: [...tk('ink'), 255],
     opacity: mix,
     visible: map.getZoom() >= 10.3,
     updateTriggers: { getText: version },
@@ -727,7 +735,7 @@ function boroughSet(mix) {
     opacity: mix,
     pickable: mix > 0.5,
     autoHighlight: true,
-    highlightColor: [255, 255, 255, 50],
+    highlightColor: [...TOKENS.paper.light, 60],
     transitions: { getFillColor: { duration: 450 } },
     updateTriggers: { getFillColor: triggers },
   });
@@ -745,8 +753,8 @@ function boroughSet(mix) {
     fontSettings: { sdf: true, fontSize: 96, buffer: 12, radius: 12, smoothing: 0.2 },
     // A halo in the land color, so the value reads on any shade.
     outlineWidth: 2,
-    outlineColor: theme === 'dark' ? [17, 20, 23, 255] : [244, 245, 242, 255],
-    getColor: theme === 'dark' ? [236, 238, 241, 255] : [16, 23, 31, 255],
+    outlineColor: [...tk('paper'), 255],
+    getColor: [...tk('ink'), 255],
     opacity: mix,
     updateTriggers: { getText: version, getColor: triggers },
   });
