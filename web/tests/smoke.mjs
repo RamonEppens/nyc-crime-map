@@ -1,6 +1,6 @@
 // Headless checks against the Python SQL server, with a plain basemap (no network needed):
 //   - the app loads and the totals render, in both themes;
-//   - the legend shows exactly the ramp the map uses, with breaks for the hexagons in view;
+//   - the key shows exactly the ramp the map uses, with numeric ranges; panning never recolors;
 //   - screenshots at zoom 11, 12, 13 (columns) and 14 (points), top-down and tilted, for the
 //     gap check (neighboring hexagons must share edges, no hairlines).
 // Usage: node tests/smoke.mjs [baseUrl] [sqlUrl] [outDir]
@@ -65,11 +65,18 @@ for (const theme of ['dark', 'light']) {
   await page.waitForTimeout(800);
   console.log(theme, 'only robbery 2025:', await first(), '|', await page.textContent('#summary-filter'));
   await page.screenshot({ path: `${out}/${theme}-only.png` });
-  // One offense type (or one whole group) colors the map with its group's ramp; legend follows.
-  const tinted = (await page.$$eval('.legend-ramp span', (els) => els.map((e) => getComputedStyle(e).backgroundColor))).map(hex);
-  const wantRed = theme === 'dark' ? '#ffa08d' : '#690313';
-  console.log(theme, 'robbery only, legend top:', tinted.at(-1));
-  if (tinted.at(-1) !== wantRed) errors.push(`${theme}: one person-crime type should tint the map oxblood (${tinted.at(-1)})`);
+  // One density hue whatever the offense filter; the key title names the selection.
+  const oneHue = (await page.$$eval('.legend-ramp span', (els) => els.map((e) => getComputedStyle(e).backgroundColor))).map(hex);
+  const robTitle = await page.textContent('#legend-title');
+  console.log(theme, 'robbery only, key:', robTitle);
+  if (JSON.stringify(oneHue) !== JSON.stringify(RAMPS[theme])) errors.push(`${theme}: one offense type should keep the density ramp`);
+  if (!/robbery/.test(robTitle)) errors.push(`${theme}: the key title should name the selection (${robTitle})`);
+  // Panning does not change classes (city-wide breaks).
+  const breaksBefore = (await page.evaluate(() => window.__hexStats())).breaks.join(',');
+  await page.evaluate(() => window.__nycmap.panBy([300, 200], { duration: 0 }));
+  await page.waitForTimeout(800);
+  if ((await page.evaluate(() => window.__hexStats())).breaks.join(',') !== breaksBefore) errors.push(`${theme}: panning changed the color classes`);
+  await page.evaluate(() => window.__nycmap.panBy([-300, -200], { duration: 0 }));
   // Stable hexagon array: same length and order whatever the filter (needed for transitions).
   const before = await page.evaluate(() => window.__hexStats());
   await page.click('[data-select="all"]');
@@ -296,7 +303,7 @@ for (const theme of ['dark', 'light']) {
   const pTitle = await page.textContent('#legend-title');
   console.log(theme, 'precinct view:', pTitle, '| pitch/bearing', flat.join('/'), '|', (await page.textContent('.legend-labels')).replace(/\s+/g, ' ').trim(),
     '|', (await page.textContent('#summary-sub')).trim());
-  if (pTitle !== 'Complaints per precinct') errors.push(`${theme}: legend title ${pTitle}`);
+  if (!pTitle.startsWith('Complaints per 1,000 residents')) errors.push(`${theme}: 2D key should show a rate (${pTitle})`);
   if (Math.abs(flat[0]) > 0.5 || Math.abs(flat[1]) > 0.5) errors.push(`${theme}: precinct view is not flat (${flat})`);
   // The 2D switch: boroughs, then back to precincts.
   await page.click('.unit-switch');
@@ -304,12 +311,12 @@ for (const theme of ['dark', 'light']) {
   const bTitle = await page.textContent('#legend-title');
   const bLabels = (await page.textContent('.legend-labels')).replace(/\s+/g, ' ').trim();
   console.log(theme, 'borough view:', bTitle, '|', bLabels, '|', (await page.textContent('#summary-sub')).trim());
-  if (bTitle !== 'Complaints per borough') errors.push(`${theme}: the switch should show boroughs (${bTitle})`);
-  if ((await page.$$('.legend-ramp span')).length !== 5) errors.push(`${theme}: the borough key should have five shades`);
+  if (!/borough/.test(await page.textContent('#summary-sub'))) errors.push(`${theme}: the switch should show boroughs`);
+  if (!bTitle.startsWith('Complaints per 1,000 residents')) errors.push(`${theme}: borough key should show a rate (${bTitle})`);
   await page.screenshot({ path: `${out}/${theme}-boroughs.png` });
   await page.click('.unit-switch');
   await page.waitForTimeout(1200);
-  if ((await page.textContent('#legend-title')) !== 'Complaints per precinct') errors.push(`${theme}: the switch should go back to precincts`);
+  if (!/precinct/.test(await page.textContent('#summary-sub'))) errors.push(`${theme}: the switch should go back to precincts`);
   await page.screenshot({ path: `${out}/${theme}-precincts.png` });
   await page.evaluate(() => window.__select.precinct(75));
   await page.waitForTimeout(1500);
@@ -337,7 +344,7 @@ for (const theme of ['dark', 'light']) {
   await page.click('.view-switch [data-view="hex"]');
   await page.waitForTimeout(2500);
   const tilt = await page.evaluate(() => window.__nycmap.getPitch());
-  if (Math.abs(tilt - 45) > 0.5 || (await page.textContent('#legend-title')) !== 'Complaints per hexagon') errors.push(`${theme}: back to hexagons failed (pitch ${tilt})`);
+  if (Math.abs(tilt - 35) > 0.5 || !(await page.textContent('#legend-title')).startsWith('Complaints per hexagon')) errors.push(`${theme}: back to hexagons failed (pitch ${tilt})`);
 
   for (const [zoom, pitch, name] of [[12, 0, 'z12-top'], [13, 0, 'z13-top'], [13, 45, 'z13-tilt'], [14.2, 45, 'z14-points']]) {
     await page.evaluate(([z, p]) => window.__nycmap.jumpTo({ center: [-73.99, 40.735], zoom: z, pitch: p, bearing: -12 }), [zoom, pitch]);

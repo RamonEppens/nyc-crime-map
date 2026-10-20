@@ -229,23 +229,22 @@ select:hover { border-color: var(--ink); }
 /* On the map: the key (bottom left of the map) and the display switches (top right of the map),
    each in a small paper box with a rule. They belong to the map, not to the filters. */
 .map-box { position: absolute; z-index: 2; background: var(--sheet); border: 1px solid var(--rule-strong); border-radius: var(--r); }
-.legend { left: calc(var(--controls) + 14px); bottom: 14px; width: 292px; padding: 8px 12px 6px; }
-.legend-head { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
-.legend h2 { font-size: 12.5px; font-weight: 650; }
+.legend { left: calc(var(--controls) + 14px); bottom: 14px; width: max-content; max-width: 260px; padding: 8px 12px 8px; }
+.legend-head { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 7px; }
+.legend h2 { font-size: 12.5px; font-weight: 650; line-height: 1.3; }
 .q {
-  display: inline-grid; place-items: center; width: 14px; height: 14px; border: 1px solid var(--rule-strong); border-radius: 50%;
+  display: inline-grid; place-items: center; flex-shrink: 0; width: 14px; height: 14px; border: 1px solid var(--rule-strong); border-radius: 50%;
   font-size: 9.5px; font-weight: 700; color: var(--muted); cursor: help;
 }
 .q:hover, .q:focus-visible { color: var(--ink); border-color: var(--ink); }
-.legend-ramp { display: grid; grid-template-columns: repeat(var(--k, 6), 1fr); gap: 0; }
-.legend-ramp span { height: 8px; }
-.legend-labels { position: relative; height: 15px; margin-top: 5px; font-size: 11px; color: var(--ink); }
-.legend-labels span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
-.legend-labels span::before { content: ''; position: absolute; left: 50%; top: -5px; height: 4px; border-left: 1px solid var(--ink); }
-.legend-labels .end { color: var(--muted); transform: none; }
-.legend-labels .end::before { display: none; }
-.legend-labels .start { left: 0; }
-.legend-labels .stop { right: 0; }
+/* Six swatches with their ranges underneath, one column each */
+.legend-ramp, .legend-labels { display: grid; grid-template-columns: repeat(var(--k, 6), minmax(36px, 1fr)); }
+.legend-ramp span { height: 10px; }
+.legend-labels { margin-top: 4px; font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.legend-labels span { text-align: center; white-space: nowrap; padding: 0 2px; }
+.legend-few { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 11px; color: var(--ink); }
+.legend-few[hidden] { display: none; }
+.legend-few i { width: 16px; height: 10px; background: repeating-linear-gradient(135deg, var(--muted) 0 1.5px, transparent 1.5px 4px), var(--sheet-2); }
 
 /* Display switches: words, the current one underlined */
 .switches { top: 12px; right: calc(var(--panel-w, 0px) + 12px); display: flex; align-items: center; gap: 18px; padding: 5px 14px; transition: right 220ms ease; }

@@ -224,18 +224,41 @@ function setupCategoryActions() {
 }
 
 // Legend: the same ramp and breaks the map is using right now (breaks follow the viewport).
-function renderLegend(ramp, breaks, unit = 'hexagon') {
-  $('#legend-title').textContent = `Complaints per ${unit}`;
-  $('#legend-hint').textContent = unit === 'precinct' ? 'A sixth of the precincts per color, sex crimes included'
-    : unit === 'borough' ? 'One shade per borough, fewest to most; sex crimes included'
-    : 'Each color holds about a sixth of the hexagons in view';
+/** What the current offense filter is, as words for the key title ("crimes against persons"). */
+function selectionWords() {
+  const n = state.cats.size, all = meta.categories.length;
+  if (n === all || n === 0) return '';
+  const groups = [...new Set([...state.cats].map((c) => meta.categories[c].group))];
+  const full = (g) => meta.categories.filter((c) => c.group === g).every((c) => state.cats.has(c.code));
+  if (n === 1) return meta.categories[[...state.cats][0]].label.toLowerCase();
+  if (groups.length === 1 && full(groups[0])) return GROUP_LABELS[groups[0]].toLowerCase();
+  return `${n} of ${all} offense types`;
+}
+// Key: the classes the map is showing, as numeric ranges, with measure, unit and period in the title.
+let lastLegend = null;
+function renderLegend(spec = lastLegend) {
+  if (!spec || !meta) return;
+  lastLegend = spec;
+  const { ramp, breaks, unit, rate, few } = spec;
+  const what = selectionWords();
+  const tail = [what, periodLabel()].filter(Boolean).join(', ');
+  $('#legend-title').textContent = rate ? `Complaints per 1,000 residents a year, ${tail}`
+    : `Complaints per hexagon (180 m), ${tail}`;
+  $('#legend-hint').textContent = rate
+    ? 'Precincts and boroughs are colored by complaints per 1,000 residents (2020 Census) per year, in six classes with about the same number of precincts each, rounded to friendly numbers. Boroughs use the same classes. Precincts with fewer than 2,000 residents are hatched, not rated. Rape and sex crimes are included.'
+    : 'Hexagons are colored in six classes that each hold about a sixth of the hexagons with complaints anywhere in the city, rounded to friendly numbers. The classes change only when you change the dates or offenses, so panning never recolors the map.';
+  $('#legend-q').title = $('#legend-hint').textContent;
+  const fmtB = (v) => (rate ? (v >= 100 ? fmt(Math.round(v)) : String(+v.toFixed(1))) : fmtShort(v));
+  const ranges = ramp.map((_, i) => {
+    if (i === 0) return rate ? `<${fmtB(breaks[0])}` : `1–${fmtB(breaks[0])}`;
+    if (i === ramp.length - 1) return `${rate ? fmtB(breaks[i - 1]) : fmtB(breaks[i - 1] + 1)}+`;
+    const lo = rate ? breaks[i - 1] : breaks[i - 1] + 1;
+    return lo === breaks[i] ? fmtB(lo) : `${fmtB(lo)}–${fmtB(breaks[i])}`;
+  });
   $('.legend-ramp').style.setProperty('--k', ramp.length);
-  $('#legend-q').title = $('#legend-hint').textContent;   // the explanation lives in the "?"
   $('.legend-ramp').innerHTML = ramp.map((c) => `<span style="background:${c}"></span>`).join('');
-  // Each break sits on the boundary between two colors (k / 6 of the width).
-  $('.legend-labels').innerHTML = '<span class="end start">fewer</span>'
-    + breaks.map((b, i) => `<span style="left:${((i + 1) / ramp.length) * 100}%">${fmtShort(b)}</span>`).join('')
-    + '<span class="end stop">more</span>';
+  $('.legend-labels').innerHTML = ranges.map((r) => `<span>${r}</span>`).join('');
+  $('.legend-few').hidden = !few;
 }
 
 function renderCity({ total, precinctOnly, previous, compare, days }) {
@@ -354,7 +377,7 @@ const boroughPopulation = (code) => meta.ntas.filter((n) => n.boro === code).red
 let precinctGeo;
 async function ensurePrecincts() {
   if (precinctGeo) return;
-  precinctGeo = await loadJson('precincts.geojson');
+  [precinctGeo] = await Promise.all([loadJson('precincts.geojson'), loadCompare()]);   // rates need populations
   setPrecinctShapes(precinctGeo);
 }
 const precinctMerged = () => Math.min(...monthsOf(state.period)) < SPLIT_MONTH;
@@ -819,8 +842,7 @@ const yearsOf = (months) => [...new Set(months.map((m) => 2016 + Math.floor(m / 
 function chartColor() {
   const g = selectionGroup();
   const dark = document.documentElement.dataset.theme === 'dark';
-  if (g) return GROUP_RAMPS[g][dark ? 'dark' : 'light'][4];
-  return dark ? RAMPS.dark[4] : RAMPS.light[4];
+  return dark ? RAMPS.dark[4] : RAMPS.light[4];    // one data color, whatever the offense filter
 }
 
 /** Rows {lat, lon, ...} inside a hexagon or a 200 m circle (the SQL box is only a first cut). */
@@ -992,8 +1014,13 @@ async function refresh() {
   ]);
   if (ticket !== pending) return;      // a newer refresh started; drop this one
   setTint(selectionGroup());                      // before both layers, so they change color together
-  if (precinctGeo) setPrecincts(new Map(byPct.map((r) => [r.pct, r.n])), precinctMerged());
-  if (boroughGeo) setBoroughs(new Map(byBoro.map((r) => [r.boro, r.n])));
+  const years = daysOf(monthsOf(state.period)) / 365.25;
+  if (precinctGeo) {
+    const pop = new Map(Object.entries(cmp?.precinct_population ?? {}).map(([k, v]) => [+k, v]));
+    setPrecincts(new Map(byPct.map((r) => [r.pct, r.n])), precinctMerged(), { pop, years });
+  }
+  if (boroughGeo) setBoroughs(new Map(byBoro.map((r) => [r.boro, r.n])), { pop: new Map([1, 2, 3, 4, 5].map((b) => [b, boroughPopulation(b)])), years });
+  renderLegend();                                   // the title names the dates and offenses
 
   const lt = Object.fromEntries(byLt.map((r) => [r.lt, r.n]));
   const total = (lt[0] ?? 0) + (lt[1] ?? 0) + (lt[2] ?? 0);

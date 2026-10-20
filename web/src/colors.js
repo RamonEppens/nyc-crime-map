@@ -66,6 +66,36 @@ export function quantileBreaks(values, k = 6) {
   return breaks;
 }
 
+/** Quantile breaks rounded to friendly numbers (…, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, …), strictly
+ *  increasing, so the key reads "11–20" instead of "13–21" while the classes stay roughly equal. */
+export function niceBreaks(values, k = 6) {
+  const raw = quantileBreaks(values.filter((v) => v > 0), k);
+  const STEPS = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8];
+  const nice = (x) => {
+    if (!(x > 0)) return 1;
+    const mag = 10 ** Math.floor(Math.log10(x));
+    let best = mag, bestD = Infinity;
+    for (const m of [...STEPS, 10]) {
+      const v = m * mag;
+      const d = Math.abs(Math.log(v / x));
+      if (d < bestD) { best = v; bestD = d; }
+    }
+    return +best.toPrecision(3);
+  };
+  const next = (x) => {                            // the friendly number just above x
+    const mag = 10 ** Math.floor(Math.log10(x));
+    for (const m of [...STEPS, 10]) if (+(m * mag).toPrecision(3) > x) return +(m * mag).toPrecision(3);
+    return x * 1.5;
+  };
+  const out = [];
+  for (const b of raw) {
+    let v = nice(b);
+    if (out.length && v <= out.at(-1)) v = next(out.at(-1));
+    out.push(v);
+  }
+  return out;
+}
+
 /** Class index (0..k-1) of a value given ascending breaks: value <= breaks[0] is class 0. */
 export function classify(value, breaks) {
   let i = 0;
