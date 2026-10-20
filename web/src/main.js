@@ -1,6 +1,7 @@
 // Entry point: state, queries and wiring between filters, map and summary panel.
 import './styles.css';
-import { initDb, query, loadJson } from './db.js';
+import { initDb, query, loadJson, loadText, warmRemote, loadStartCache, whenEngineReady } from './db.js';
+import * as db from './db.js';
 import {
   createMap, setTheme, setHexagons, setUniverse, hexStats, setSelection, showBounds,
   setView, setPrecinctShapes, setPrecincts, precinctUnit, precinctName, setTint, setBoroughShapes, setBoroughs, setUnit2d,
@@ -976,6 +977,8 @@ async function renderCharts(ticket) {
 let pending = 0;
 async function refresh() {
   const ticket = ++pending;
+  // First visit: until the engine has downloaded, a new filter can't be answered yet; say so.
+  if (!db.engineIsReady() && document.body.dataset.ready) $('#summary-sub').textContent = 'Loading the full data to apply this…';
   const compare = comparisonOf(state.period);
   const [hex, byLt, byCat, previous, byPct, byBoro] = await Promise.all([
     query(`SELECT q, r, sum(n)::INTEGER AS n FROM hex WHERE ${where()} GROUP BY 1, 2`),
@@ -1107,9 +1110,13 @@ async function main() {
   setupViewSwitch();
   renderPeriod();
 
-  const [m, g] = await Promise.all([loadJson('meta.json'), loadJson('nta.geojson'), initDb()]);
-  meta = m;
+  // The engine (DuckDB, ~35 MB the first time) loads in the background while the map and the
+  // controls come up; every query waits for it on its own.
+  initDb();
+  const [metaText, g] = await Promise.all([loadText('meta.json'), loadJson('nta.geojson')]);
+  meta = JSON.parse(metaText);
   ntaGeo = g;
+  if (!params.has('db')) await loadStartCache(metaText);   // first map without waiting for the engine
   $('.detail .close').onclick = clearSelection;
   $('.charts-open').onclick = () => { setPanelView('charts'); $('.detail-body').scrollTop = 0; renderCharts(pending); };
   $('.charts-back').onclick = () => setPanelView('details');
@@ -1158,11 +1165,6 @@ async function main() {
   }, () => { loadStreets(loadJson); loadCompare(); });
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.selected) clearSelection(); });
   state.cats = new Set(meta.categories.map((c) => c.code));
-  const [cells, drawn] = await Promise.all([
-    query('SELECT DISTINCT q, r FROM hex ORDER BY q, r'),
-    query('SELECT cat, sum(n) FILTER (WHERE lt = 0)::INTEGER AS drawn FROM agg_precinct GROUP BY cat'),
-  ]);
-  state.notMapped = new Set(drawn.filter((d) => !d.drawn).map((d) => d.cat));
   renderCategories();
   setupCategoryActions();
   if (state.view === 'precincts') await ensurePrecincts();
@@ -1175,6 +1177,12 @@ async function main() {
     categories: meta.categories,
     hooks: { onLegend: renderLegend, loadPoints, onPick },
   });
+  const [cells, drawn] = await Promise.all([
+    query('SELECT DISTINCT q, r FROM hex ORDER BY q, r'),
+    query('SELECT cat, sum(n) FILTER (WHERE lt = 0)::INTEGER AS drawn FROM agg_precinct GROUP BY cat'),
+  ]);
+  state.notMapped = new Set(drawn.filter((d) => !d.drawn).map((d) => d.cat));
+  renderCategories();
   setUniverse(cells);
   loadJson('boroughs.geojson').then((geo) => {
     boroughGeo ??= geo;
@@ -1198,6 +1206,9 @@ async function main() {
     window.__select = { city: selectCity, precinct: (pct) => (precinctGeo ? selectPrecinct(precinctUnit(pct)) : selectPrecinctNumber(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, point: selectPoint, street: selectStreet, clear: clearSelection };
   }
   await refresh();
+  // If the first map came from the start cache, ask again once the engine is ready (same numbers,
+  // but now everything after this comes from the engine), then open the big remote tables.
+  whenEngineReady().then(async () => { if (db.usedStartCache) await refresh(); warmRemote(); });
 }
 
 main().catch((err) => {

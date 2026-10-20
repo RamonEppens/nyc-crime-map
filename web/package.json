@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "fetch:duckdb-ext": "node scripts/fetch-duckdb-ext.mjs",
-    "test:smoke": "node tests/smoke.mjs"
+    "test:smoke": "node tests/smoke.mjs",
+    "build:start-cache": "node scripts/build-start-cache.mjs"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",

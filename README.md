@@ -35,6 +35,14 @@ uv run scripts/08_streets.py
 uv run scripts/09_charts.py
 ```
 
+Then, with `npm run dev` and the test SQL server running (`python tests/sql_server.py ../data/web 8765`, from `web/`),
+rebuild the start cache so the first map appears before the browser engine has downloaded:
+
+```
+cd web
+npm run build:start-cache     # writes data/web/start.json (ignored automatically if meta.json changes)
+```
+
 ## Data & credit
 Data: NYC Open Data / NYPD. This is an independent project and is not affiliated with or endorsed
 by the City of New York or the NYPD.
