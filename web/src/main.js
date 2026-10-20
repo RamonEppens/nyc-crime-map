@@ -11,7 +11,7 @@ import { hexAt, hexCenter, hexPolygon, featureAt, meters, circlePolygon, bounds,
 import { setupSearch, loadStreets, streetById } from './search.js';
 import { GROUP_COLORS, GROUP_LABELS, RAMPS } from './colors.js';
 import { buildReport } from './report.js';
-import { fmt, fmtCompact, fmtChange, fmtShort } from './format.js';
+import { fmt, fmtCompact, fmtChange, fmtShort, tnum } from './format.js';
 import {
   MODES, MONTH_NAMES, FIRST_YEAR, LAST_YEAR, N_MONTHS, defaultPeriod, monthsOf, monthSql, labelOf,
   daysOf, comparisonOf, mIndex, yearOf, monthOf,
@@ -257,7 +257,7 @@ function renderLegend(spec = lastLegend) {
   });
   $('.legend-ramp').style.setProperty('--k', ramp.length);
   $('.legend-ramp').innerHTML = ramp.map((c) => `<span style="background:${c}"></span>`).join('');
-  $('.legend-labels').innerHTML = ranges.map((r) => `<span>${r}</span>`).join('');
+  $('.legend-labels').innerHTML = ranges.map((r) => `<span>${tnum(r)}</span>`).join('');
   $('.legend-few').hidden = !few;
 }
 
@@ -308,7 +308,7 @@ function renderBars(rows) {
   const shown = state.showAllBars ? items : items.slice(0, 8);
   const max = Math.max(1, ...items.map((i) => i.n));
   const color = chartColor();
-  $('.bars').innerHTML = shown.map(({ label, n }) => `<div class="bar"><span class="name">${label}</span><span class="num">${fmt(n)}</span>
+  $('.bars').innerHTML = shown.map(({ label, n }) => `<div class="bar"><span class="name">${label}</span><span class="num">${tnum(fmt(n))}</span>
       <span class="track"><span class="fill" style="width:${Math.max(0.6, (n / max) * 100)}%;background:${color}"></span></span></div>`).join('');
   const more = $('.more');
   more.hidden = items.length <= 8;
@@ -319,7 +319,7 @@ function renderBars(rows) {
 // Summary in the title block: the total for the current filters (a link to the city panel) and
 // what part of it the current view cannot draw.
 function renderSummary({ total, precinctOnly, none, noPrecinct, noBorough }) {
-  $('#city-total').textContent = `${fmt(total)} complaints`;
+  $('#city-total').innerHTML = `${tnum(fmt(total))} complaints`;
   // One sentence, like the dek under a headline: "579,560 complaints in 2025, all offenses.
   // 16,430 have no location on the map."
   $('#summary-filter').textContent = `in ${filterLabel()}.`;

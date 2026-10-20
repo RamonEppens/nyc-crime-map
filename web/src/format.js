@@ -10,3 +10,6 @@ export function fmtChange(pct) {
   const sign = pct > 0 ? '+' : pct < 0 ? '−' : '';
   return `${sign}${Math.abs(pct).toFixed(1)}%`;
 }
+/** HTML for a number set in tabular figures: digits keep a fixed width, but commas and periods
+ *  stay proportional (Schibsted Grotesk's tabular set would otherwise widen them). */
+export const tnum = (text) => String(text).replace(/[,.]/g, (c) => `<span class="pn">${c}</span>`);
