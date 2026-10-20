@@ -91,4 +91,50 @@ export function comparisonOf(p) {
   return { months: prev, label };
 }
 
+/** First and last month index of a period (the month strip draws it as one span). */
+export function spanOf(p) {
+  const ms = monthsOf(p);
+  return [ms[0], ms[ms.length - 1]];
+}
+
+/** The period for a span of months [a, b], in the simplest mode that describes it: a whole year,
+ *  a range of whole years, one month, or a month range. */
+export function periodFromSpan(p, a, b) {
+  const lo = Math.max(0, Math.min(a, b)), hi = Math.min(N_MONTHS - 1, Math.max(a, b));
+  const next = { ...p };
+  if (monthOf(lo) === 0 && monthOf(hi) === 11) {
+    if (yearOf(lo) === yearOf(hi)) Object.assign(next, { mode: 'year', year: yearOf(lo) });
+    else Object.assign(next, { mode: 'yearRange', fromYear: yearOf(lo), toYear: yearOf(hi) });
+  } else if (lo === hi) Object.assign(next, { mode: 'month', month: lo });
+  else Object.assign(next, { mode: 'monthRange', fromMonth: lo, toMonth: hi });
+  return next;
+}
+
+/** Date presets (the chips above the month strip). */
+export const PRESETS = [
+  { id: 'last', label: String(LAST_YEAR), span: [mIndex(LAST_YEAR, 0), mIndex(LAST_YEAR, 11)] },
+  { id: 'three', label: `${LAST_YEAR - 2}–${LAST_YEAR}`, span: [mIndex(LAST_YEAR - 2, 0), mIndex(LAST_YEAR, 11)] },
+  { id: 'all', label: `${FIRST_YEAR}–${LAST_YEAR}`, span: [0, N_MONTHS - 1] },
+];
+
+/** "Change since 2019" (the last year before the pandemic): for periods that start in 2020 or
+ *  later, the same calendar months in 2019 (a period up to a year long) or 2019 as a whole year
+ *  compared with the period's yearly average. Otherwise the usual comparison (the period before),
+ *  scaled the same way. Returns { months, scale, label, words } or null. scale turns the period's
+ *  total into the comparable figure (total * scale vs the baseline's total). */
+export const BASE_YEAR = 2019;
+export function baselineOf(p) {
+  const ms = monthsOf(p);
+  if (p.mode !== 'crossyear' && ms[0] >= mIndex(BASE_YEAR + 1, 0)) {
+    if (ms.length <= 12) {
+      const shift = (yearOf(ms[0]) - BASE_YEAR) * 12;
+      return { months: ms.map((m) => m - shift), scale: 1, label: `Change since ${BASE_YEAR}`, words: `from ${BASE_YEAR}` };
+    }
+    return { months: range(mIndex(BASE_YEAR, 0), mIndex(BASE_YEAR, 11)), scale: 12 / ms.length,
+      label: `Change since ${BASE_YEAR}`, words: `from ${BASE_YEAR}, yearly average` };
+  }
+  const c = comparisonOf(p);
+  return c ? { months: c.months, scale: 1, label: c.label.replace(/^vs /, 'Change since '), words: c.label.replace(/^vs /, 'from ') } : null;
+}
+
 export { mIndex, yearOf, monthOf };

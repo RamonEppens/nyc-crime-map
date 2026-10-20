@@ -26,6 +26,7 @@ export function niceTicks(max, count = 4) {
 
 // One tooltip per chart container. It sits just above the plot and follows the pointer sideways,
 // so it never covers the marks being read (it covers the one-line answer above the chart instead).
+const NO_HOVER = matchMedia('(hover: none)');
 function tooltip(host) {
   let tip = host.querySelector(':scope > .chart-tip');
   if (!tip) {
@@ -36,6 +37,7 @@ function tooltip(host) {
   }
   return {
     show(html, evt) {
+      if (NO_HOVER.matches) return;                    // touch: no tooltips
       if (html !== this.current) { tip.innerHTML = html; this.current = html; }
       tip.hidden = false;
       const box = host.getBoundingClientRect();

@@ -32,7 +32,7 @@ for (const theme of ['dark', 'light']) {
   await page.goto(`${base}?db=${encodeURIComponent(sql)}&basemap=none&theme=${theme}`);
   await page.waitForSelector('body[data-ready="true"]', { timeout: 60000 });
   await settle(page);
-  console.log(theme, '|', (await page.textContent('.brand .summary')).replace(/\s+/g, ' ').trim(), '|', await page.textContent('#summary-sub'));
+  console.log(theme, '|', (await page.textContent('#dek')).replace(/\s+/g, ' ').trim(), '|', await page.textContent('#summary-sub'));
   if (!(await page.isHidden('.detail'))) errors.push(`${theme}: the details panel should start closed`);
   await page.click('#city-total');                      // open the city panel (bars are checked below)
   await page.waitForTimeout(600);
@@ -48,20 +48,25 @@ for (const theme of ['dark', 'light']) {
   // Filters: date modes, stepper, "only", None, All, hiding a block.
   const first = async () => (await page.textContent('#city-total')).replace(' complaints', '').trim();
   const total2025 = await first();
-  await page.selectOption('#period-mode', 'month');
+  await page.evaluate(() => window.__setSpan(119, 119));          // December 2025
   await page.waitForTimeout(800);
   const dec2025 = await first();
-  await page.click('.stepper button:first-child');
-  await page.waitForTimeout(800);
+  await page.focus('#strip');
+  await page.keyboard.press('ArrowLeft');                          // the strip moves one month back
+  await page.waitForTimeout(1200);
   const nov2025 = await first();
   console.log(theme, 'year 2025:', total2025, '| Dec 2025:', dec2025, '| Nov 2025:', nov2025, '|', await page.textContent('#summary-filter'));
   if (dec2025 === total2025 || nov2025 === dec2025) errors.push(`${theme}: month filter did not change totals`);
-  await page.selectOption('#period-mode', 'crossyear');
+  await page.focus('#strip');
+  await page.keyboard.press('Shift+ArrowRight');                   // Shift: the span grows
+  await page.waitForTimeout(1200);
+  console.log(theme, 'Shift+Right:', await page.textContent('#period-label'));
+  if (!/Nov 2025 to Dec 2025/.test(await page.textContent('#period-label'))) errors.push(`${theme}: Shift+arrow should resize the span`);
+  await page.click('#period-presets [data-preset="last"]');
   await page.waitForTimeout(800);
-  console.log(theme, 'every July:', await first(), '|', await page.textContent('#summary-filter'));
-  await page.selectOption('#period-mode', 'year');
-  await page.hover('.cat:has-text("Robbery")');
-  await page.click('.cat:has-text("Robbery") .cat-only');
+  while (await page.$('button.cat-fold[aria-expanded="false"]')) await page.click('button.cat-fold[aria-expanded="false"]');
+  await page.hover('.cat-row:has([data-code]):has-text("Robbery")');
+  await page.click('.cat-row:has([data-code]):has-text("Robbery") .cat-only');
   await page.waitForTimeout(800);
   console.log(theme, 'only robbery 2025:', await first(), '|', await page.textContent('#summary-filter'));
   await page.screenshot({ path: `${out}/${theme}-only.png` });
@@ -88,8 +93,8 @@ for (const theme of ['dark', 'light']) {
 
   // Rapid clicks: only the last selection may win.
   for (const name of ['Burglary', 'Drugs', 'Robbery', 'Weapons', 'Homicide']) {
-    await page.hover(`.cat:has-text("${name}")`);
-    await page.click(`.cat:has-text("${name}") .cat-only`);
+    await page.hover(`.cat-row:has([data-code]):has-text("${name}")`);
+    await page.click(`.cat-row:has([data-code]):has-text("${name}") .cat-only`);
   }
   await page.waitForTimeout(1200);
   const sub = await page.textContent('#summary-filter');
@@ -98,8 +103,8 @@ for (const theme of ['dark', 'light']) {
   if (!bars.includes('Homicide')) errors.push(`${theme}: rapid clicks did not end on the last selection`);
 
   // Rape & sex crimes only: nothing to draw, the notice must explain why.
-  await page.hover('.cat:has-text("Rape")');
-  await page.click('.cat:has-text("Rape") .cat-only');
+  await page.hover('.cat-row:has([data-code]):has-text("Rape")');
+  await page.click('.cat-row:has([data-code]):has-text("Rape") .cat-only');
   await page.waitForTimeout(1000);
   const notice = await page.isVisible('.map-notice') ? (await page.textContent('.map-notice')).replace(/\s+/g, ' ').trim() : '';
   console.log(theme, 'rape only:', await first(), '| notice:', notice.slice(0, 90));
@@ -118,9 +123,15 @@ for (const theme of ['dark', 'light']) {
   await page.waitForTimeout(500);
   const blue = (await page.$$eval('.legend-ramp span', (els) => els.map((e) => getComputedStyle(e).backgroundColor))).map(hex);
   if (JSON.stringify(blue) !== JSON.stringify(RAMPS[theme])) errors.push(`${theme}: All should bring back the plum ramp`);
-  await page.click('[data-block="period"] .block-toggle');
-  if (await page.isVisible('#period-body')) errors.push(`${theme}: Hide did not hide the date block`);
-  await page.click('[data-block="period"] .block-toggle');
+  // The sheet folds to a rail (the dek moves onto the map) and comes back.
+  await page.click('.sheet-toggle');
+  await page.waitForTimeout(400);
+  if (await page.evaluate(() => document.body.dataset.sheet) !== 'rail' || !(await page.isVisible('.dek-card #dek'))) errors.push(`${theme}: collapse should leave a rail and the dek on the map`);
+  await page.click('[data-rail="search"]');
+  await page.waitForTimeout(400);
+  if (await page.evaluate(() => document.body.dataset.sheet) !== 'full' || await page.evaluate(() => document.activeElement.id) !== 'search') errors.push(`${theme}: the rail's search button should open the sheet and focus search`);
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => document.activeElement.blur());
   // Selection: click a hexagon on the map, follow the link to its neighborhood, go back.
   await page.evaluate(() => window.__nycmap.jumpTo({ center: [-73.94, 40.80], zoom: 12, pitch: 0, bearing: 0 }));
   await settle(page);
@@ -197,11 +208,11 @@ for (const theme of ['dark', 'light']) {
     };
   };
   const cases = [
-    ['350 5th ave', /^350 5th Avenue Manhattan, Midtown South/, '350 5th Avenue', /within 200 m/i, 'address'],
-    ['5th ave and w 42nd st', /^5th Avenue & West 42nd Street Corner in Manhattan/, '5th Avenue & West 42nd Street', /within 200 m/i, 'corner'],
-    ['37-12 80th st', /^37-12 80th Street Queens, Jackson Heights/, '37-12 80th Street', /within 200 m/i, null],
+    ['350 5th ave', /^350 5th Avenue Manhattan, Midtown South/, '350 5th Avenue', /within 200\sm/i, 'address'],
+    ['5th ave and w 42nd st', /^5th Avenue & West 42nd Street Corner in Manhattan/, '5th Avenue & West 42nd Street', /within 200\sm/i, 'corner'],
+    ['37-12 80th st', /^37-12 80th Street Queens, Jackson Heights/, '37-12 80th Street', /within 200\sm/i, null],
     ['broadway manhattan', /^Broadway Manhattan/, 'Broadway', /per 100 m/, 'street'],
-    ['75th precinct', /^75th Precinct Brooklyn/, '75th Precinct', /city rate per resident/, null],
+    ['75th precinct', /^75th Precinct Brooklyn/, '75th Precinct', /percentile, \d+ precincts/, null],
   ];
   for (const [text, firstRe, title, figRe, shot] of cases) {
     const opts = await searchFor(text);
@@ -229,12 +240,12 @@ for (const theme of ['dark', 'light']) {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.querySelector('#search-results').dataset.query === '');
   await page.keyboard.press('Escape');
-  await page.selectOption('#period-mode', 'month');
+  await page.evaluate(() => window.__setSpan(119, 119));
   await page.waitForTimeout(600);
   await searchFor('350 5th ave');
   const monthly = await openFirst();
   if (!/whole years/.test(monthly.figs)) errors.push(`${theme}: a single month should not be compared (${monthly.figs})`);
-  await page.selectOption('#period-mode', 'year');
+  await page.click('#period-presets [data-preset="last"]');
   await page.waitForTimeout(600);
   await page.keyboard.press('Escape');
   await page.fill('#search', 'mott');
@@ -290,14 +301,15 @@ for (const theme of ['dark', 'light']) {
   await page.evaluate(() => window.__nycmap.jumpTo({ center: [-73.965, 40.715], zoom: 11, pitch: 45, bearing: -12 }));
   await settle(page);
 
-  await page.selectOption('#period-mode', 'monthRange');
+  await page.evaluate(() => window.__setSpan(102, 113));            // Jul 2024 to Jun 2025
   await page.waitForTimeout(800);
+  if (!(await page.isVisible('#period-custom'))) errors.push(`${theme}: a span that is not a preset should show the month pickers`);
   await page.screenshot({ path: `${out}/${theme}-monthrange.png` });
-  await page.selectOption('#period-mode', 'year');
+  await page.click('#period-presets [data-preset="last"]');
   await page.waitForTimeout(800);
 
   // Precinct view: flat, legend per precinct, a click selects a precinct, 105/113/116 merged before 2025.
-  await page.click('.view-switch [data-view="precincts"]');
+  await page.click('.areas [data-area="precinct"]');
   await page.waitForTimeout(2500);
   const flat = await page.evaluate(() => [window.__nycmap.getPitch(), window.__nycmap.getBearing()]);
   const pTitle = await page.textContent('#legend-title');
@@ -306,7 +318,7 @@ for (const theme of ['dark', 'light']) {
   if (!pTitle.startsWith('Complaints per 1,000 residents')) errors.push(`${theme}: 2D key should show a rate (${pTitle})`);
   if (Math.abs(flat[0]) > 0.5 || Math.abs(flat[1]) > 0.5) errors.push(`${theme}: precinct view is not flat (${flat})`);
   // The 2D switch: boroughs, then back to precincts.
-  await page.click('.unit-switch');
+  await page.click('.areas [data-area="borough"]');
   await page.waitForTimeout(1500);
   const bTitle = await page.textContent('#legend-title');
   const bLabels = (await page.textContent('.legend-labels')).replace(/\s+/g, ' ').trim();
@@ -314,7 +326,7 @@ for (const theme of ['dark', 'light']) {
   if (!/borough/.test(await page.textContent('#summary-sub'))) errors.push(`${theme}: the switch should show boroughs`);
   if (!bTitle.startsWith('Complaints per 1,000 residents')) errors.push(`${theme}: borough key should show a rate (${bTitle})`);
   await page.screenshot({ path: `${out}/${theme}-boroughs.png` });
-  await page.click('.unit-switch');
+  await page.click('.areas [data-area="precinct"]');
   await page.waitForTimeout(1200);
   if (!/precinct/.test(await page.textContent('#summary-sub'))) errors.push(`${theme}: the switch should go back to precincts`);
   await page.screenshot({ path: `${out}/${theme}-precincts.png` });
@@ -325,12 +337,12 @@ for (const theme of ['dark', 'light']) {
   if (p75 !== '75th Precinct') errors.push(`${theme}: precinct selection ${p75}`);
   await page.click('.detail .close');
   await page.waitForTimeout(500);
-  await page.selectOption('#period-mode', 'month');
-  await page.waitForTimeout(500);
-  await page.click('.stepper button:last-child');           // stepping forward stays in the window
-  await page.waitForTimeout(500);
-  await page.selectOption('#period-mode', 'year');
-  await page.click('.stepper button:first-child');           // 2024: before the 116th Precinct
+  await page.evaluate(() => window.__setSpan(119, 119));
+  await page.focus('#strip');
+  await page.keyboard.press('ArrowRight');                  // moving forward stays in the window
+  await page.waitForTimeout(800);
+  if (!/Dec 2025|December 2025/.test(await page.textContent('#period-label'))) errors.push(`${theme}: the strip moved past Dec 2025`);
+  await page.evaluate(() => window.__setSpan(96, 107));     // 2024: before the 116th Precinct
   await page.waitForTimeout(1200);
   await page.evaluate(() => window.__select.precinct(116));
   await page.waitForFunction(() => /116th/.test(document.querySelector('.detail h2').textContent), null, { timeout: 8000 }).catch(() => {});
@@ -339,9 +351,9 @@ for (const theme of ['dark', 'light']) {
   console.log(theme, '2024, 116th ->', merged);
   if (merged !== '105th, 113th and 116th Precincts') errors.push(`${theme}: 2024 should merge 105/113/116 (${merged})`);
   await page.click('.detail .close');
-  await page.click('.stepper button:last-child');
+  await page.click('#period-presets [data-preset="last"]');
   await page.waitForTimeout(800);
-  await page.click('.view-switch [data-view="hex"]');
+  await page.click('.areas [data-area="hex"]');
   await page.waitForTimeout(2500);
   const tilt = await page.evaluate(() => window.__nycmap.getPitch());
   if (Math.abs(tilt - 35) > 0.5 || !(await page.textContent('#legend-title')).startsWith('Complaints per hexagon')) errors.push(`${theme}: back to hexagons failed (pitch ${tilt})`);

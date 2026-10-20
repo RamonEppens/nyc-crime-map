@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,119 +7,142 @@
   <meta name="description" content="Complaints reported to the NYPD from 2016 to 2025, mapped from NYC Open Data." />
   <link rel="icon" type="image/png" href="favicon.png" />
   <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <script>
+    // Theme before first paint: the visitor's own choice, else the system setting (decision #71).
+    try {
+      const t = new URLSearchParams(location.search).get('theme') ?? localStorage.getItem('theme:v3');
+      document.documentElement.dataset.theme = t === 'dark' || t === 'light' ? t
+        : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    } catch { document.documentElement.dataset.theme = 'light'; }
+  </script>
 </head>
 <body>
   <div class="app">
     <main class="map-wrap">
       <div id="map" role="region" aria-label="Map of reported complaints"></div>
 
-      <!-- Left sheet, docked: masthead and a one-sentence summary, search, dates, offenses, key, map options -->
-      <div class="controls sheet" aria-label="Filters">
-        <header class="masthead brand">
-          <div class="brand-row">
-            <img src="logo.png" alt="" />
-            <div>
-              <h1>NYC Crime Map</h1>
-              <p>NYPD complaints, 2016–2025</p>
-            </div>
-          </div>
-          <p class="summary dek" aria-live="polite"><button class="total" id="city-total" title="Show the New York City summary">Loading ten years of complaints…</button>
-            <span id="summary-filter"></span> <span class="summary-sub" id="summary-sub"></span></p>
+      <!-- Left sheet: what the map shows. Collapses to a 56 px rail. -->
+      <nav class="controls sheet" id="sheet" aria-label="Search and filters">
+        <header class="masthead">
+          <img class="logo" src="logo.png" alt="" width="28" height="28" />
+          <h1>NYC Crime Map</h1>
+          <button class="icon-btn sheet-toggle" type="button" aria-expanded="true" aria-controls="sheet-body" aria-label="Collapse the side panel" title="Collapse the side panel">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 6l-6 6 6 6M20 4v16"/></svg>
+          </button>
         </header>
-
-        <div class="search" role="search">
-          <label class="visually-hidden" for="search">Search an address, street, neighborhood or borough</label>
-          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
-          <input id="search" type="search" placeholder="Search an address or a place" autocomplete="off" spellcheck="false"
-            role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="search-results" />
-          <button class="search-clear" type="button" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-          <ul id="search-results" role="listbox" aria-label="Search results" hidden></ul>
-        </div>
-
-        <div class="filters">
-          <section class="filter" data-block="period">
-            <div class="block-head">
-              <h2 id="period-title">Dates</h2>
-              <button class="block-toggle" aria-expanded="true" aria-controls="period-body">Hide</button>
-            </div>
-            <div class="block-body" id="period-body">
-              <label class="visually-hidden" for="period-mode">How to choose the dates</label>
-              <div class="select-wrap"><select id="period-mode"></select></div>
-              <div class="period-inputs"></div>
-            </div>
-          </section>
-
-          <section class="filter" data-block="offenses">
-            <div class="block-head">
-              <h2 id="offenses-title">Offenses <span class="count" id="offenses-count"></span></h2>
-              <span class="foot-actions"><button data-select="all">All</button><button data-select="none">Clear</button></span>
-              <button class="block-toggle" aria-expanded="true" aria-controls="offenses-body">Hide</button>
-            </div>
-            <div class="block-body" id="offenses-body">
-              <div class="cat-grid" role="group" aria-labelledby="offenses-title"></div>
-              <p class="hint withheld" title="Counted in the totals, not drawn on the map">† Location withheld by NYPD: counted, not drawn.</p>
-            </div>
-          </section>
-        </div>
-
-      </div>
-
-      <!-- On the map: the key (bottom left) and how the map is drawn (top right) -->
-        <section class="legend map-box" data-block="legend" aria-labelledby="legend-title">
-          <div class="legend-head"><h2 id="legend-title">Complaints per hexagon</h2>
-            <span class="q" id="legend-q" tabindex="0" role="img" aria-describedby="legend-hint">?</span></div>
-          <p class="visually-hidden" id="legend-hint">Each color holds about a sixth of the hexagons in view</p>
-          <div class="legend-ramp" aria-hidden="true"></div>
-          <div class="legend-labels"></div>
-          <p class="legend-few" hidden><i aria-hidden="true"></i>Few residents, not rated</p>
-        </section>
-
-        <div class="switches map-box" aria-label="Map display">
-          <div class="pill view-switch" role="radiogroup" aria-label="Map view">
-            <button role="radio" data-view="hex">3D</button>
-            <button role="radio" data-view="precincts">2D</button>
-          </div>
-          <div class="pill theme-switch" role="radiogroup" aria-label="Map style">
-            <button role="radio" data-value="light">Day</button>
-            <button role="radio" data-value="dark">Night</button>
-          </div>
-          <!-- 2D only: precincts or boroughs -->
-          <button class="unit-switch" role="switch" aria-checked="false" aria-label="Show boroughs instead of precincts">
-            <span class="unit-a">Precincts</span><span class="track" aria-hidden="true"><span class="knob"></span></span><span class="unit-b">Boroughs</span>
+        <!-- Rail (collapsed): logo, search, filters -->
+        <div class="rail">
+          <button class="icon-btn rail-btn" type="button" data-rail="search" aria-label="Search" title="Search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+          </button>
+          <button class="icon-btn rail-btn" type="button" data-rail="filters" aria-label="Dates and offenses" title="Dates and offenses">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
           </button>
         </div>
 
+        <div class="sheet-body" id="sheet-body">
+          <div class="dek-slot">
+            <p class="dek" id="dek" aria-live="polite"><button class="total" id="city-total" type="button" title="Show the New York City summary">Loading 2025 complaints…</button>
+              <span id="summary-filter"></span> <span class="summary-sub" id="summary-sub"></span></p>
+          </div>
+          <div class="progress" aria-hidden="true"><i></i></div>
+
+          <div class="search" role="search">
+            <label class="visually-hidden" for="search">Search an address, street, neighborhood or precinct</label>
+            <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+            <input id="search" type="search" placeholder="Search an address, street, neighborhood or precinct" autocomplete="off" spellcheck="false"
+              role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="search-results" aria-keyshortcuts="/" />
+            <kbd class="search-key" aria-hidden="true">/</kbd>
+            <button class="search-clear" type="button" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <ul id="search-results" role="listbox" aria-label="Search results" hidden></ul>
+          </div>
+
+          <section class="filter" data-block="period" aria-labelledby="period-title">
+            <div class="block-head">
+              <h2 id="period-title">Dates</h2>
+              <span class="block-value" id="period-label"></span>
+            </div>
+            <div class="chips-row" role="radiogroup" aria-label="Date presets" id="period-presets"></div>
+            <div class="strip" id="strip" tabindex="0" role="slider" aria-label="Months shown" aria-valuemin="0" aria-valuemax="119"
+              aria-describedby="strip-hint">
+              <svg class="strip-svg" aria-hidden="true"></svg>
+            </div>
+            <div class="strip-axis" aria-hidden="true"><span>2016</span><span>2020</span><span>2025</span></div>
+            <p class="visually-hidden" id="strip-hint">Monthly complaints, January 2016 to December 2025. Drag to choose months. Arrow keys move the range; Shift and arrow keys change its length.</p>
+            <div class="custom" id="period-custom" hidden></div>
+          </section>
+
+          <section class="filter" data-block="offenses" aria-labelledby="offenses-title">
+            <div class="block-head">
+              <h2 id="offenses-title">Offenses <span class="count" id="offenses-count"></span></h2>
+              <span class="foot-actions"><button type="button" data-select="all">Select all</button><button type="button" data-select="none">Clear</button></span>
+            </div>
+            <div class="cat-grid" role="group" aria-labelledby="offenses-title"></div>
+            <p class="hint withheld">† Location withheld by NYPD: counted, not drawn.</p>
+          </section>
+
+          <footer class="sheet-foot">
+            <a class="link" href="about.html">About this data</a>
+            <p class="freshness">Data through Dec 2025 · NYC Open Data, NYPD Complaint Data Historic, updated quarterly · Independent project, not affiliated with the City of New York or the NYPD.</p>
+          </footer>
+        </div>
+      </nav>
+      <!-- The dek, when the sheet is collapsed (the same element moves here) -->
+      <div class="dek-card" hidden></div>
+
+      <!-- Map chrome. Top right: how areas are drawn; bottom left: the key. -->
+      <div class="chrome-tr">
+        <div class="segmented areas" role="radiogroup" aria-label="Areas">
+          <button type="button" role="radio" data-area="hex">Hot spots</button>
+          <button type="button" role="radio" data-area="precinct">Precincts</button>
+          <button type="button" role="radio" data-area="borough">Boroughs</button>
+        </div>
+        <button type="button" class="tilt-toggle chrome-btn" aria-pressed="true" title="Tilt the map to show columns">Tilt</button>
+      </div>
+
+      <section class="legend map-box" data-block="legend" aria-labelledby="legend-title">
+        <div class="legend-head"><h2 id="legend-title">Complaints per hexagon</h2>
+          <button type="button" class="q" id="legend-q" aria-expanded="false" aria-controls="legend-explain" aria-label="How to read the key">?</button></div>
+        <div class="legend-ramp" aria-hidden="true"></div>
+        <div class="legend-labels"></div>
+        <p class="legend-few" hidden><i aria-hidden="true"></i>Few residents, not rated</p>
+        <div class="legend-explain" id="legend-explain" role="dialog" aria-label="How to read the key" hidden>
+          <p id="legend-hint"></p>
+          <p><a class="link" href="about.html#colors">How colors are set</a></p>
+        </div>
+      </section>
+
       <div class="map-notice" role="status" hidden></div>
 
-      <!-- Right: details of what is selected; only shown when something is -->
-      <aside class="detail sheet" data-block="detail" aria-label="Details" aria-live="polite" hidden>
+      <!-- Right: the place you picked, over the map -->
+      <aside class="detail" data-block="detail" aria-label="Details" hidden>
         <div class="detail-head">
           <div class="detail-top">
-            <h2 class="place">New York City</h2>
+            <h2 class="place" tabindex="-1">New York City</h2>
             <div class="detail-actions">
-              <button class="expand icon-btn" aria-pressed="false" aria-label="Expand panel" title="Expand panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></button>
-              <button class="block-toggle icon-btn" aria-expanded="true" aria-controls="detail-body">Hide</button>
-              <button class="close icon-btn" aria-label="Close details" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+              <button class="expand icon-btn" type="button" aria-pressed="false" aria-label="Expand panel" title="Expand panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></button>
+              <button class="close icon-btn" type="button" aria-label="Close details" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
             </div>
           </div>
           <p class="context" hidden></p>
           <p class="sub"></p>
         </div>
         <div class="detail-body" id="detail-body">
+          <p class="lead" aria-live="polite"></p>
+          <div class="figures"></div>
           <div class="tabs" role="tablist" aria-label="Panel view">
-            <button class="tab charts-back" role="tab" aria-selected="true">Details</button>
-            <button class="tab charts-open" role="tab" aria-selected="false">Over time</button>
+            <button class="tab charts-back" type="button" role="tab" aria-selected="true">Details</button>
+            <button class="tab charts-open" type="button" role="tab" aria-selected="false">Over time</button>
           </div>
           <div class="details-view">
-          <div class="figures"></div>
-          <p class="figures-note"></p>
-          <div class="detail-section">
-            <h3 class="section-title">By offense</h3>
-            <div class="bars"></div>
-            <button class="more" hidden></button>
-          </div>
-          <p class="note"></p>
-          <p class="credit">Data: <a href="https://data.cityofnewyork.us/d/qgea-i56i" target="_blank" rel="noopener">NYC Open Data, NYPD Complaint Data Historic</a>, updated <span class="updated"></span>. Independent project, not affiliated with the City of New York or the NYPD.</p>
+            <div class="detail-section">
+              <h3 class="section-title">By offense</h3>
+              <div class="bars"></div>
+              <button class="more" type="button" hidden></button>
+            </div>
+            <p class="figures-note"></p>
+            <p class="note"></p>
+            <p class="credit">Data: <a href="https://data.cityofnewyork.us/d/qgea-i56i" target="_blank" rel="noopener">NYC Open Data, NYPD Complaint Data Historic</a>, updated <span class="updated"></span>. <a href="about.html">About this data</a>.</p>
           </div>
           <!-- Charts: how this place changed over time (src/report.js) -->
           <div class="charts-view" hidden>

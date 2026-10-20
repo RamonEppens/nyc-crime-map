@@ -5,16 +5,16 @@ import * as db from './db.js';
 import {
   createMap, setTheme, setHexagons, setUniverse, hexStats, setSelection, showBounds,
   setView, setPrecinctShapes, setPrecincts, precinctUnit, precinctName, setTint, setBoroughShapes, setBoroughs, setUnit2d,
-  setPin, flyToPoint, fitTo, setHighlight, followTo, followEnd, setMask,
+  setPin, flyToPoint, fitTo, setHighlight, followTo, followEnd, setMask, setTilt, addMapButton,
 } from './map.js';
 import { hexAt, hexCenter, hexPolygon, featureAt, meters, circlePolygon, bounds, degLat, degLon } from './geo.js';
 import { setupSearch, loadStreets, streetById } from './search.js';
 import { GROUP_COLORS, GROUP_LABELS, RAMPS } from './colors.js';
 import { buildReport } from './report.js';
-import { fmt, fmtCompact, fmtChange, fmtShort, tnum } from './format.js';
+import { fmt, fmtShort, tnum } from './format.js';
 import {
-  MODES, MONTH_NAMES, FIRST_YEAR, LAST_YEAR, N_MONTHS, defaultPeriod, monthsOf, monthSql, labelOf,
-  daysOf, comparisonOf, mIndex, yearOf, monthOf,
+  MONTH_NAMES, FIRST_YEAR, LAST_YEAR, N_MONTHS, defaultPeriod, monthsOf, monthSql, labelOf,
+  daysOf, comparisonOf, baselineOf, mIndex, yearOf, monthOf, spanOf, periodFromSpan, PRESETS,
 } from './period.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -33,6 +33,7 @@ const state = {
 const SPLIT_MONTH = 108;                        // 2025-01: first month with the 116th Precinct (see pipeline)
 let meta;
 let ntaGeo;                                     // neighborhood boundaries (for clicks and outlines)
+let keyHelp = null;
 
 // ---------- preferences (theme, collapsed blocks): remembered per browser when storage is available
 function pref(key, fallback) {
@@ -49,42 +50,9 @@ function where(months = monthsOf(state.period)) {
 }
 const periodLabel = () => labelOf(state.period);
 
-// ---------- blocks: Hide / Show
-function setupBlocks() {
-  for (const btn of document.querySelectorAll('.block-toggle')) {
-    const body = document.getElementById(btn.getAttribute('aria-controls'));
-    const block = btn.closest('[data-block]').dataset.block;
-    const key = `block:${block}`;
-    const persist = block !== 'detail';           // the details panel opens expanded every time
-    const apply = (open) => {
-      btn.setAttribute('aria-expanded', String(open));
-      btn.textContent = open ? 'Hide' : 'Show';
-      body.hidden = !open;
-    };
-    apply(!persist || pref(key, 'open') === 'open');
-    btn.onclick = () => {
-      const open = btn.getAttribute('aria-expanded') !== 'true';
-      apply(open);
-      if (persist) savePref(key, open ? 'open' : 'closed');
-    };
-    btn.expand = () => apply(true);
-  }
-}
-
-// ---------- date range block
+// ---------- dates: preset chips, a month strip (drag, or arrow keys), custom month pickers
 function option(value, label, selected) {
   return `<option value="${value}"${selected ? ' selected' : ''}>${label}</option>`;
-}
-function stepper(label, canPrev, canNext, onStep) {
-  const el = document.createElement('div');
-  el.className = 'stepper';
-  el.innerHTML = `<button aria-label="Previous" ${canPrev ? '' : 'disabled'}>−</button>
-    <output aria-live="polite">${label}</output>
-    <button aria-label="Next" ${canNext ? '' : 'disabled'}>+</button>`;
-  const [prev, next] = el.querySelectorAll('button');
-  prev.onclick = () => onStep(-1, 'prev');
-  next.onclick = () => onStep(1, 'next');
-  return el;
 }
 function monthSelects(value, onChange) {
   const frag = document.createDocumentFragment();
@@ -100,127 +68,229 @@ function monthSelects(value, onChange) {
   frag.append(month, year);
   return frag;
 }
+const presetOf = (span) => PRESETS.find((x) => x.span[0] === span[0] && x.span[1] === span[1]);
+let customOpen = false;
+let monthly = null;                                // complaints per month for the selected offenses (the strip)
+let stripSpan = null;                              // span being dragged / keyed, before it is applied
+
+/** Apply a span of months: the strip and label update at once, the map follows. */
+function setSpan(a, b, { now = true } = {}) {
+  state.period = periodFromSpan(state.period, a, b);
+  stripSpan = null;
+  renderPeriod();
+  if (now) refresh(); else scheduleRefresh();
+}
+let refreshTimer = 0;
+function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 250); }
 
 function renderPeriod() {
-  const p = state.period;
-  const mode = $('#period-mode');
-  mode.innerHTML = MODES.map(([v, l]) => option(v, l, v === p.mode)).join('');
-  mode.onchange = () => { p.mode = mode.value; renderPeriod(); refresh(); };
-
-  const box = $('.period-inputs');
-  box.innerHTML = '';
-  // Re-render after each change, keeping keyboard focus on the control that was used.
-  const set = (patch, focus) => {
-    Object.assign(p, patch);
-    renderPeriod();
-    refresh();
-    if (focus) {
-      const [prev, next] = document.querySelectorAll('.stepper button');
-      const target = focus === 'prev' ? (prev.disabled ? next : prev) : (next.disabled ? prev : next);
-      target?.focus();
-    }
+  const span = stripSpan ?? spanOf(state.period);
+  const preset = presetOf(span);
+  const label = labelOf(periodFromSpan(state.period, span[0], span[1]));
+  $('#period-label').textContent = label;
+  const chips = $('#period-presets');
+  const items = [...PRESETS.map((x) => [x.id, x.label]), ['custom', 'Custom']];
+  const current = preset && !customOpen ? preset.id : 'custom';
+  chips.innerHTML = items.map(([id, l]) => `<button type="button" class="chip" role="radio" data-preset="${id}" aria-checked="${id === current}" tabindex="${id === current ? 0 : -1}">${l}</button>`).join('');
+  chips.onclick = (e) => {
+    const id = e.target.closest('[data-preset]')?.dataset.preset;
+    if (!id) return;
+    if (id === 'custom') { customOpen = true; renderPeriod(); $('#period-custom select')?.focus(); return; }
+    customOpen = false;
+    const x = PRESETS.find((p) => p.id === id);
+    setSpan(...x.span);
+    chips.querySelector(`[data-preset="${id}"]`)?.focus();
   };
-  if (p.mode === 'year') {
-    box.append(stepper(p.year, p.year > FIRST_YEAR, p.year < LAST_YEAR, (d, f) => set({ year: p.year + d }, f)));
-  } else if (p.mode === 'month') {
-    box.append(stepper(`${MONTH_NAMES[monthOf(p.month)]} ${yearOf(p.month)}`, p.month > 0, p.month < N_MONTHS - 1,
-      (d, f) => set({ month: p.month + d }, f)));
-  } else if (p.mode === 'crossyear') {
-    box.append(stepper(MONTH_NAMES[p.crossMonth], true, true, (d, f) => set({ crossMonth: (p.crossMonth + d + 12) % 12 }, f)));
-    const hint = document.createElement('p');
-    hint.className = 'hint';
-    hint.textContent = `Every ${MONTH_NAMES[p.crossMonth]} from ${FIRST_YEAR} to ${LAST_YEAR}, combined.`;
-    box.append(hint);
-  } else if (p.mode === 'yearRange') {
-    // One row: [2016] to [2025]
-    const row = document.createElement('div');
-    row.className = 'range-row years';
-    for (const [label, key] of [['From', 'fromYear'], ['To', 'toYear']]) {
-      if (key === 'toYear') row.insertAdjacentHTML('beforeend', '<span>to</span>');
-      row.insertAdjacentHTML('beforeend', `<div class="select-wrap"><select aria-label="${label} year">
-        ${YEARS.map((y) => option(y, y, y === p[key])).join('')}</select></div>`);
-      row.lastElementChild.querySelector('select').onchange = (e) => set({ [key]: +e.target.value });
-    }
-    box.append(row);
-  } else if (p.mode === 'monthRange') {
-    for (const [label, key] of [['From', 'fromMonth'], ['To', 'toMonth']]) {
+  // Radio group keys: arrows move between chips (and choose), like native radios.
+  chips.onkeydown = (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const all = [...chips.querySelectorAll('.chip')];
+    const i = all.indexOf(document.activeElement);
+    const next = all[(i + (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1) + all.length) % all.length];
+    next.click(); next.focus(); e.preventDefault();
+  };
+  // Custom: From / To month pickers
+  const custom = $('#period-custom');
+  custom.hidden = !customOpen && !!preset;
+  if (!custom.hidden) {
+    custom.innerHTML = '';
+    for (const [l, i] of [['From', 0], ['To', 1]]) {
       const row = document.createElement('div');
       row.className = 'range-row';
-      row.innerHTML = `<span>${label}</span>`;
-      row.append(monthSelects(p[key], (v) => set({ [key]: v })));
-      box.append(row);
+      row.innerHTML = `<span>${l}</span>`;
+      row.append(monthSelects(span[i], (v) => {
+        customOpen = true;
+        const s = [...span]; s[i] = v;
+        setSpan(s[0], s[1]);
+        custom.querySelectorAll('select')[i * 2]?.focus();
+      }));
+      custom.append(row);
     }
   }
+  drawStrip(span, label);
 }
 
-// ---------- offense types block: one toggle per category, "only", All / None
-// Short names for the two-column key (the full name is the tooltip and is used everywhere else).
-const SHORT_LABELS = {
-  'Assault (misdemeanor)': 'Assault, misd.',
-  'Other crimes against persons': 'Other, persons',
-  'Traffic & impaired driving': 'Traffic & DUI',
-  'Public order & administration': 'Public order',
-};
-// Each group title is a checkbox for the whole group (checked, unchecked or mixed); its types sit
-// in two aligned columns underneath, so the eye can scan straight down. All 18 fit without scrolling.
+/** The month strip: one bar per month (complaints for the selected offenses), the chosen span in ink. */
+function drawStrip(span, label) {
+  const el = $('#strip');
+  const svg = el.querySelector('svg');
+  const w = el.clientWidth || 280, h = 40, n = N_MONTHS;
+  const bw = w / n;
+  const max = monthly ? Math.max(1, ...monthly) : 1;
+  let bars = `<rect class="band" x="${span[0] * bw}" y="0" width="${(span[1] - span[0] + 1) * bw}" height="${h}"/>`;
+  for (let m = 0; m < n; m++) {
+    const v = monthly ? monthly[m] : 0;
+    const bh = monthly ? Math.max(1, (v / max) * (h - 4)) : 1;
+    const inside = m >= span[0] && m <= span[1];
+    bars += `<rect class="${inside ? 'bar-in' : 'bar-out'}" x="${m * bw + 0.25}" y="${h - bh}" width="${Math.max(0.6, bw - 0.6)}" height="${bh}"/>`;
+  }
+  bars += `<line class="edge" x1="${span[0] * bw}" x2="${span[0] * bw}" y1="0" y2="${h}"/><line class="edge" x1="${(span[1] + 1) * bw}" x2="${(span[1] + 1) * bw}" y1="0" y2="${h}"/>`;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.innerHTML = bars;
+  el.setAttribute('aria-valuenow', String(span[0]));
+  el.setAttribute('aria-valuetext', label);
+}
+
+function setupStrip() {
+  const el = $('#strip');
+  const monthAt = (x) => {
+    const r = el.getBoundingClientRect();
+    return Math.max(0, Math.min(N_MONTHS - 1, Math.floor(((x - r.left) / r.width) * N_MONTHS)));
+  };
+  let anchor = null;
+  el.addEventListener('pointerdown', (e) => {
+    anchor = monthAt(e.clientX);
+    el.setPointerCapture(e.pointerId);
+    customOpen = false;
+    stripSpan = [anchor, anchor];
+    renderPeriod();
+    e.preventDefault();
+    el.focus({ preventScroll: true });
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (anchor === null) return;
+    const m = monthAt(e.clientX);
+    stripSpan = [Math.min(anchor, m), Math.max(anchor, m)];
+    renderPeriod();                                   // feedback while dragging; the map follows on release
+  });
+  const end = () => {
+    if (anchor === null) return;
+    anchor = null;
+    const [a, b] = stripSpan ?? spanOf(state.period);
+    setSpan(a, b);
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  // Keys: arrows move the span; Shift + arrows change its length. Whole-year spans move by a year.
+  el.addEventListener('keydown', (e) => {
+    const dir = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+    if (!dir && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    let [a, b] = stripSpan ?? spanOf(state.period);
+    const step = monthOf(a) === 0 && monthOf(b) === 11 ? 12 : 1;
+    if (e.key === 'Home') { b -= a; a = 0; }
+    else if (e.key === 'End') { a += N_MONTHS - 1 - b; b = N_MONTHS - 1; }
+    else if (e.shiftKey) b = Math.max(a + step - 1, Math.min(N_MONTHS - 1, b + dir * step));
+    else if (a + dir * step >= 0 && b + dir * step <= N_MONTHS - 1) { a += dir * step; b += dir * step; }
+    customOpen = false;
+    stripSpan = [a, b];
+    renderPeriod();
+    clearTimeout(keyTimer);
+    keyTimer = setTimeout(() => setSpan(a, b), 250);  // holding a key: one refresh at the end
+  });
+  new ResizeObserver(() => renderPeriod()).observe(el);
+}
+let keyTimer = 0;
+/** Complaints per month for the selected offenses, for the strip (cached per offense set). */
+const monthlyCache = new Map();
+async function loadMonthly() {
+  const key = catList(state.cats);
+  if (!monthlyCache.has(key)) {
+    monthlyCache.set(key, query(`SELECT m, sum(n)::INTEGER AS n FROM agg_precinct WHERE cat IN (${key}) GROUP BY 1`).then((rows) => {
+      const out = new Array(N_MONTHS).fill(0);
+      for (const r of rows) if (r.m >= 0 && r.m < N_MONTHS) out[r.m] = r.n;
+      return out;
+    }));
+  }
+  const values = await monthlyCache.get(key);
+  if (key !== catList(state.cats)) return;
+  monthly = values;
+  renderPeriod();
+}
+
+// ---------- offenses: four group rows (folded), each type with its count and a thin bar
+const openGroups = new Set();                     // groups unfolded this visit (all folded at first)
+let catCounts = new Map();                        // complaints per type in the chosen dates (every type)
 function renderCategories() {
   const grid = $('.cat-grid');
-  grid.innerHTML = '';
+  const keep = document.activeElement?.closest('.cat-grid') ? document.activeElement.dataset.focus : null;
   const total = meta.categories.length;
   $('#offenses-count').textContent = state.cats.size === total ? `all ${total}` : `${state.cats.size} of ${total}`;
-  const toggleOne = (code) => {
-    state.cats.has(code) ? state.cats.delete(code) : state.cats.add(code);
-    renderCategories(); refresh();
-    grid.querySelector(`[data-code="${code}"]`)?.focus();
-  };
+  const max = Math.max(1, ...meta.categories.map((c) => catCounts.get(c.code) ?? 0));
+  const count = (n) => (catCounts.size ? tnum(fmt(n)) : '');
+  const only = (codes, name) => `<button type="button" class="cat-only" data-only="${codes.join(',')}" data-focus="only:${codes.join(',')}" aria-label="Show only ${name}">Only</button>`;
+  let html = '';
   for (const g of Object.keys(GROUP_LABELS)) {
     const cats = meta.categories.filter((x) => x.group === g);
     const on = cats.filter((c) => state.cats.has(c.code)).length;
-    const group = document.createElement('div');
-    group.className = 'cat-group';
-    group.style.setProperty('--g', GROUP_COLORS[g]);
     const checked = on === cats.length ? 'true' : on === 0 ? 'false' : 'mixed';
-    const note = g === 'enforcement' ? ' <span class="group-note">mostly police activity</span>' : '';
-    group.innerHTML = `<button class="cat-group-toggle" role="checkbox" aria-checked="${checked}" data-group="${g}">
-        <span class="box" aria-hidden="true"></span><span class="cat-group-title">${GROUP_LABELS[g]}</span>${note}</button>
-      ${cats.length > 1 ? '<div class="chips"></div>' : ''}`;
-    group.querySelector('.cat-group-toggle').onclick = () => {
-      // All on -> all off; otherwise -> all on.
-      for (const c of cats) on === cats.length ? state.cats.delete(c.code) : state.cats.add(c.code);
-      renderCategories(); refresh();
-      grid.querySelector(`[data-group="${g}"]`)?.focus();
-    };
-    const chips = group.querySelector('.chips');
-    if (chips) {
-      for (const c of cats) {
-        const cell = document.createElement('div');
-        cell.className = 'cat';
-        const hidden = state.notMapped.has(c.code);
-        const tip = hidden ? `${c.label}: location withheld by NYPD, counted in totals but not drawn` : c.label;
-        cell.innerHTML = `<button class="cat-toggle" data-code="${c.code}" aria-pressed="${state.cats.has(c.code)}" title="${tip}" aria-label="${c.label}">
-            <span class="dot" aria-hidden="true"></span><span class="name">${SHORT_LABELS[c.label] ?? c.label}</span>${hidden ? '<span class="mark" aria-hidden="true">†</span>' : ''}</button>
-          <button class="cat-only" aria-label="Show only ${c.label}">only</button>`;
-        cell.querySelector('.cat-toggle').onclick = () => toggleOne(c.code);
-        cell.querySelector('.cat-only').onclick = () => { state.cats = new Set([c.code]); renderCategories(); refresh(); };
-        chips.append(cell);
-      }
-    } else {
-      // A group with one type ("Other"): the title is the type; "only" still works on hover.
-      const c = cats[0];
-      group.classList.add('single');
-      group.querySelector('.cat-group-toggle').insertAdjacentHTML('afterend', `<button class="cat-only" aria-label="Show only ${c.label}">only</button>`);
-      group.querySelector('.cat-only').onclick = () => { state.cats = new Set([c.code]); renderCategories(); refresh(); };
+    const n = cats.reduce((t, c) => t + (catCounts.get(c.code) ?? 0), 0);
+    const single = cats.length === 1;
+    const open = openGroups.has(g);
+    const codes = cats.map((c) => c.code);
+    html += `<div class="cat-row group" style="--g:${GROUP_COLORS[g]}">
+      <button type="button" class="cat-check" role="checkbox" aria-checked="${checked}" data-group="${g}" data-focus="g:${g}">
+        <span class="box" aria-hidden="true"></span><span class="name">${GROUP_LABELS[g]}</span><span class="cat-n">${count(n)}</span></button>
+      ${only(codes, GROUP_LABELS[g].toLowerCase())}
+      ${single ? '<span class="cat-fold" aria-hidden="true" style="visibility:hidden"></span>'
+        : `<button type="button" class="cat-fold" aria-expanded="${open}" aria-controls="types-${g}" data-fold="${g}" data-focus="f:${g}" aria-label="${open ? 'Hide' : 'Show'} the types of ${GROUP_LABELS[g].toLowerCase()}"></button>`}
+    </div>`;
+    if (single) continue;
+    html += `<div class="cat-types" id="types-${g}" style="--g:${GROUP_COLORS[g]}"${open ? '' : ' hidden'}>
+      ${g === 'enforcement' ? '<span class="group-note">Mostly police activity, not reports by residents</span>' : ''}`;
+    for (const c of cats) {
+      const hidden = state.notMapped.has(c.code);
+      const v = catCounts.get(c.code) ?? 0;
+      html += `<div class="cat-row">
+        <button type="button" class="cat-check" role="checkbox" aria-checked="${state.cats.has(c.code)}" data-code="${c.code}" data-focus="c:${c.code}"
+          ${hidden ? `aria-description="Location withheld by NYPD: counted in totals, not drawn"` : ''}>
+          <span class="box" aria-hidden="true"></span><span class="name">${c.label}${hidden ? ' <span class="mark" aria-hidden="true">†</span>' : ''}</span><span class="cat-n">${count(v)}</span></button>
+        ${only([c.code], c.label.toLowerCase())}
+        <span class="cat-fold" aria-hidden="true" style="visibility:hidden"></span>
+        <span class="cat-bar" aria-hidden="true"><i style="width:${(100 * v) / max}%"></i></span>
+      </div>`;
     }
-    grid.append(group);
+    html += '</div>';
   }
+  grid.innerHTML = html;
+  if (keep) grid.querySelector(`[data-focus="${keep}"]`)?.focus();
 }
 function setupCategoryActions() {
-  document.querySelector('[data-select="all"]').onclick = () => {
-    state.cats = new Set(meta.categories.map((c) => c.code)); renderCategories(); refresh();
-  };
-  document.querySelector('[data-select="none"]').onclick = () => {
-    state.cats = new Set(); renderCategories(); refresh();
-  };
+  const changed = () => { renderCategories(); loadMonthly(); refresh(); };
+  $('.cat-grid').addEventListener('click', (e) => {
+    const t = e.target.closest('button');
+    if (!t) return;
+    if (t.dataset.fold) {
+      const g = t.dataset.fold;
+      openGroups.has(g) ? openGroups.delete(g) : openGroups.add(g);
+      renderCategories();
+      return;
+    }
+    if (t.dataset.only) { state.cats = new Set(t.dataset.only.split(',').map(Number)); return changed(); }
+    if (t.dataset.group) {
+      const cats = meta.categories.filter((x) => x.group === t.dataset.group);
+      const all = cats.every((c) => state.cats.has(c.code));
+      for (const c of cats) all ? state.cats.delete(c.code) : state.cats.add(c.code);   // all on -> off; else -> all on
+      return changed();
+    }
+    if (t.dataset.code) {
+      const code = +t.dataset.code;
+      state.cats.has(code) ? state.cats.delete(code) : state.cats.add(code);
+      return changed();
+    }
+  });
+  document.querySelector('[data-select="all"]').onclick = () => { state.cats = new Set(meta.categories.map((c) => c.code)); changed(); };
+  document.querySelector('[data-select="none"]').onclick = () => { state.cats = new Set(); changed(); };
 }
 
 // Legend: the same ramp and breaks the map is using right now (breaks follow the viewport).
@@ -247,7 +317,6 @@ function renderLegend(spec = lastLegend) {
   $('#legend-hint').textContent = rate
     ? 'Precincts and boroughs are colored by complaints per 1,000 residents (2020 Census) per year, in six classes with about the same number of precincts each, rounded to friendly numbers. Boroughs use the same classes. Precincts with fewer than 2,000 residents are hatched, not rated. Rape and sex crimes are included.'
     : 'Hexagons are colored in six classes that each hold about a sixth of the hexagons with complaints anywhere in the city, rounded to friendly numbers. The classes change only when you change the dates or offenses, so panning never recolors the map.';
-  $('#legend-q').title = $('#legend-hint').textContent;
   const fmtB = (v) => (rate ? (v >= 100 ? fmt(Math.round(v)) : String(+v.toFixed(1))) : fmtShort(v));
   const ranges = ramp.map((_, i) => {
     if (i === 0) return rate ? `<${fmtB(breaks[0])}` : `1–${fmtB(breaks[0])}`;
@@ -261,34 +330,47 @@ function renderLegend(spec = lastLegend) {
   $('.legend-few').hidden = !few;
 }
 
-function renderCity({ total, precinctOnly, previous, compare, days }) {
-  const change = compare && previous ? ((total - previous) / previous) * 100 : NaN;
-  showFigures([
-    fig('Complaints', fmt(total)),
-    fig('Per day', fmt(total / days)),
-    compare && previous
-      ? fig(compare.label.replace(/^vs /, 'Change vs '), fmtChange(change))
-      : fig('Location withheld', fmt(precinctOnly), 'counted, not on the map'),
-    fig('Per 1,000 residents', fmt(total / (meta.totals.population_2020 / 1000)), '2020 Census population'),
-  ]);
+function renderCity({ total, precinctOnly, previous, base, days }) {
+  showSummary({ total, base: base && { ...base, n: previous }, cityRate: true,
+    ratio: { value: (total / (meta.totals.population_2020 / 1000) / (days / 365.25)).toFixed(1), label: 'Per 1,000 residents',
+      note: 'a year, 2020 Census', words: `${(total / (meta.totals.population_2020 / 1000) / (days / 365.25)).toFixed(1)} per 1,000 residents a year` },
+    notes: [precinctOnly ? `${fmt(precinctOnly)} have their location withheld by NYPD: counted, not on the map.` : ''] });
 }
 
-/** One figure tile: short label above, the number, and an optional small note below. */
-const fig = (label, value, note = '', small = false, help = '') => ({ label, value, note, small, help });
+const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const helpMark = (text) => (text
-  ? ` <span class="q" tabindex="0" role="img" aria-label="${text.replace(/"/g, '&quot;')}" title="${text.replace(/"/g, '&quot;')}">?</span>` : '');
-function showFigures(figures, note = '') {
-  $('.figures').innerHTML = figures.map((f) => `<div class="figure"><div class="label">${f.label}${helpMark(f.help)}</div>
-    <div class="value${f.small ? ' small' : ''}">${f.value}</div>${f.note ? `<div class="fnote">${f.note}</div>` : ''}</div>`).join('');
-  $('.figures-note').textContent = note;
+  ? ` <button type="button" class="q" aria-label="${esc(text)}" title="${esc(text)}">?</button>` : '');
+/** Change against the baseline (2019, or the period before): tile value, note and the words for
+ *  the lead sentence. Small counts (under 20) give both numbers instead of a percentage. */
+function changeOf(total, base) {
+  if (!base) return { value: '—', note: 'no earlier period in the data', words: '' };
+  const year = base.label.replace(/^Change since /, '');
+  const x = total * base.scale;
+  if (total < 20 || base.n < 20) {
+    return { value: `${fmt(base.n)} → ${fmt(x)}`, note: base.scale === 1 ? `${year} → now` : `${year} → yearly average`, words: `${fmt(base.n)} ${base.words.replace(/^from /, 'in ')}` };
+  }
+  const pct = ((x - base.n) / base.n) * 100;
+  const shown = Math.abs(pct) >= 10 ? Math.round(pct) : +pct.toFixed(1);
+  const value = shown === 0 ? '0%' : `${shown > 0 ? '+' : '−'}${Math.abs(shown)}%`;
+  const note = `${year}: ${fmt(base.n)}${base.scale === 1 ? '' : ', vs yearly average'}`;
+  const words = Math.abs(pct) < 1 ? `about the same as ${base.words.replace(/^from /, '')}`
+    : `${pct > 0 ? 'up' : 'down'} ${Math.abs(shown)}% ${base.words}`;
+  return { value, note, words };
 }
-
-/** Change vs the comparison period. Small counts (under 20) show both numbers instead of a
- *  percentage, which would swing wildly. */
-function changeNote(total, previous, compare) {
-  if (!compare || previous == null) return '';
-  if (total < 20 || previous < 20) return `${fmt(previous)} ${compare.label.replace(/^vs /, 'in ')}`;
-  return `${fmtChange(((total - previous) / previous) * 100)} ${compare.label}`;
+/** The panel's lead sentence and three tiles: Total · Compared with the city · Change since 2019. */
+function showSummary({ total, totalNote = '', ratio = { value: 'n/a' }, label = 'Compared with the city', base, notes = [] }) {
+  const change = changeOf(total, base);
+  const parts = [`${fmt(total)} complaint${total === 1 ? '' : 's'} in ${periodLabel()}`];
+  if (ratio.words) parts.push(ratio.words);
+  if (change.words) parts.push(change.words);
+  $('.lead').textContent = `${parts.join(', ')}.`;
+  const tile = (l, v, note = '', help = '') => `<div class="figure"><div class="label">${l}${helpMark(help)}</div>
+    <div class="value">${v}</div>${note ? `<div class="fnote">${note}</div>` : ''}</div>`;
+  $('.figures').innerHTML = tile('Total', tnum(fmt(total)), totalNote || 'complaints')
+    + tile(ratio.label ?? label, ratio.value, ratio.note ?? '', ratio.help ?? '')
+    + tile(base?.label ?? 'Change', change.value, change.note,
+      base ? `The same months in ${base.label.replace(/^Change since /, '')}${base.scale === 1 ? '' : ' (a whole year, against this period\'s yearly average)'}, same offenses.${base.label.endsWith('2019') ? ' 2019 is the last year before the pandemic changed reporting.' : ''}` : '');
+  $('.figures-note').textContent = notes.filter(Boolean).join('\n');
 }
 
 const ordinal = (n) => {
@@ -589,7 +671,8 @@ const fmtLength = (m) => (m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)}
 
 async function renderSelection(ticket) {
   const sel = state.selected;
-  const compare = comparisonOf(state.period);
+  const base = baselineOf(state.period);
+  const compare = base;
   const top = (rows) => {
     const best = rows.reduce((a, b) => (b.n > (a?.n ?? -1) ? b : a), null);
     return best ? meta.categories[best.cat].label : 'None';
@@ -600,7 +683,7 @@ async function renderSelection(ticket) {
     const info = meta.ntas[sel.code];
     const [byCat, prev, all] = await Promise.all([
       query(`SELECT cat, sum(n)::INTEGER AS n FROM agg_nta WHERE nta = ${sel.code} AND ${where()} GROUP BY 1`),
-      compare ? query(`SELECT sum(n)::INTEGER AS n FROM agg_nta WHERE nta = ${sel.code} AND ${where(compare.months)}`) : [{ n: 0 }],
+      base ? query(`SELECT sum(n)::INTEGER AS n FROM agg_nta WHERE nta = ${sel.code} AND ${where(base.months)}`) : [{ n: 0 }],
       query(`SELECT nta, sum(n)::INTEGER AS n FROM agg_nta WHERE ${where()} GROUP BY 1`),
     ]);
     if (ticket !== pending) return;
@@ -614,16 +697,11 @@ async function renderSelection(ticket) {
     renderHeader(info.name, `Neighborhood in <button class="link" data-boro="${info.boro}">${meta.boroughs[info.boro]}</button>, ${info.population ? `${fmt(info.population)} residents` : 'no resident population'}`);
     const years = perYear(daysOf(monthsOf(state.period)));
     const per100k = (r) => fmt((r * 100000) / years);
-    showFigures([
-      fig('Complaints', fmt(total)),
-      residential ? fig('Compared with typical', fmtIndex(rate / cityRate), 'the city rate per resident', false,
-        `Complaints per resident ÷ the city rate. ${per100k(rate)} per 100,000 residents per year (city: ${per100k(cityRate)}).`)
-        : fig('Compared with typical', 'n/a', 'few or no residents'),
-      fig('Most frequent', top(byCat), '', true),
-      residential ? fig('Percentile', ordinal(percentileOf(rates, rate)), 'among neighborhoods, per resident', false,
-        'Share of residential neighborhoods (1,000+ residents) with a lower rate per resident.')
-        : fig('Percentile', 'n/a', 'not ranked'),
-    ], changeNote(total, prev[0]?.n ?? 0, compare));
+    showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 },
+      ratio: residential ? { value: fmtIndex(rate / cityRate), note: `${ordinal(percentileOf(rates, rate))} percentile, neighborhoods`,
+        words: `${fmtIndex(rate / cityRate)} the city rate per resident`,
+        help: `Complaints per resident ÷ the city rate. ${per100k(rate)} per 100,000 residents a year (city: ${per100k(cityRate)}). Percentile: share of residential neighborhoods (1,000+ residents) with a lower rate.` }
+        : { value: 'n/a', note: 'few or no residents' } });
     renderBars(byCat);
     $('.detail .note').textContent = `${RESIDENT_NOTE} Neighborhood counts include only complaints with a map location; rape and sex crimes are counted by precinct.`;
   } else if (sel.kind === 'borough') {
@@ -631,7 +709,7 @@ async function renderSelection(ticket) {
     // places only at the station house (rape, sex crimes).
     const [byCat, prev, city] = await Promise.all([
       query(`SELECT cat, sum(n)::INTEGER AS n FROM agg_precinct WHERE boro = ${sel.code} AND ${where()} GROUP BY 1`),
-      compare ? query(`SELECT sum(n)::INTEGER AS n FROM agg_precinct WHERE boro = ${sel.code} AND ${where(compare.months)}`) : [{ n: 0 }],
+      base ? query(`SELECT sum(n)::INTEGER AS n FROM agg_precinct WHERE boro = ${sel.code} AND ${where(base.months)}`) : [{ n: 0 }],
       query(`SELECT sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()}`),
     ]);
     if (ticket !== pending) return;
@@ -645,14 +723,10 @@ async function renderSelection(ticket) {
     const rank = 1 + boroRates.filter((r) => r > rate).length;
     const years = perYear(daysOf(monthsOf(state.period)));
     renderHeader(meta.boroughs[sel.code], `Borough of New York City, ${fmt(population)} residents`);
-    showFigures([
-      fig('Complaints', fmt(total)),
-      cityRate ? fig('Compared with typical', fmtIndex(rate / cityRate), 'the city rate per resident', false,
-        `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents per year (city: ${fmt((cityRate * 100000) / years)}).`)
-        : fig('Compared with typical', 'n/a'),
-      fig('Most frequent', top(byCat), '', true),
-      fig('Rank', ordinal(rank), 'of 5 boroughs, per resident', false, 'Position among the five boroughs by complaints per resident (1st = highest).'),
-    ], changeNote(total, prev[0]?.n ?? 0, compare));
+    showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 },
+      ratio: cityRate ? { value: fmtIndex(rate / cityRate), note: `${ordinal(rank)} of 5 boroughs`, words: `${fmtIndex(rate / cityRate)} the city rate per resident`,
+        help: `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents a year (city: ${fmt((cityRate * 100000) / years)}). Rank among the five boroughs by complaints per resident (1st = highest).` }
+        : { value: 'n/a' } });
     renderBars(byCat);
     $('.detail .note').textContent = `${RESIDENT_NOTE} Borough counts include every complaint, also rape and sex crimes, which NYPD places at the precinct station house.`;
   } else if (sel.kind === 'precinct') {
@@ -687,22 +761,17 @@ async function renderSelection(ticket) {
     const years = perYear(daysOf(monthsOf(state.period)));
     renderHeader(precinctName(sel.props), `NYPD precinct${sel.props.merged ? 's' : ''} in ${meta.boroughs[boro[0]?.boro] ?? 'New York City'}, ${fmt(population)} residents`
       + (sel.props.merged ? '<br>Shown together: the 116th was created from the 105th and 113th in December 2024.' : ''));
-    showFigures([
-      fig('Complaints', fmt(total)),
-      ranked ? fig('Compared with typical', fmtIndex(rate / cityRate), 'the city rate per resident', false,
-        `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents per year (city: ${fmt((cityRate * 100000) / years)}).`)
-        : fig('Compared with typical', 'n/a', 'few or no residents'),
-      fig('Most frequent', top(byCat), '', true),
-      ranked ? fig('Percentile', ordinal(percentileOf(rates, rate)), `among ${units.size} precincts, per resident`, false,
-        'Share of precincts with a lower rate of complaints per resident.')
-        : fig('Percentile', 'n/a', 'not ranked'),
-    ], changeNote(total, prev[0]?.n ?? 0, compare));
+    showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 },
+      ratio: ranked ? { value: fmtIndex(rate / cityRate), note: `${ordinal(percentileOf(rates, rate))} percentile, ${units.size} precincts`,
+        words: `${fmtIndex(rate / cityRate)} the city rate per resident`,
+        help: `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents a year (city: ${fmt((cityRate * 100000) / years)}). Percentile: share of precincts with a lower rate per resident.` }
+        : { value: 'n/a', note: 'few or no residents' } });
     renderBars(byCat);
     $('.detail .note').textContent = `${RESIDENT_NOTE} Precinct counts use NYPD's precinct field and include every complaint, also rape and sex crimes. Population: 2020 Census blocks inside the precinct.`;
   } else if (sel.kind === 'point') {
-    await renderPoint(sel, ticket, compare, top, sum);
+    await renderPoint(sel, ticket, base, top, sum);
   } else if (sel.kind === 'street') {
-    await renderStreet(sel, ticket, compare, top, sum);
+    await renderStreet(sel, ticket, base, top, sum);
   } else {
     const { q, r } = sel;
     const [byCat, prev, all] = await Promise.all([
@@ -718,12 +787,10 @@ async function renderSelection(ticket) {
     renderHeader('Hexagon', nta
       ? `Hexagon of about 8 blocks in <button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>`
       : 'Hexagon of about 8 blocks, 180 m per side');
-    showFigures([
-      fig('Complaints', fmt(total)),
-      median ? fig('Compared with typical', `${(total / median).toFixed(1)}×`, 'the median hexagon') : fig('Compared with typical', 'n/a'),
-      fig('Most frequent', top(byCat), '', true),
-      fig('Percentile', ordinal(percentileOf(values, total)), 'among hexagons with complaints'),
-    ], changeNote(total, prev[0]?.n ?? 0, compare));
+    showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 }, label: 'Compared with typical',
+      ratio: median ? { value: `${(total / median).toFixed(1)}×`, note: `${ordinal(percentileOf(values, total))} percentile, hexagons`,
+        words: `${(total / median).toFixed(1)}× the median hexagon`, help: 'Complaints in this hexagon ÷ the median hexagon with complaints, same dates and offenses.' }
+        : { value: 'n/a' } });
     renderBars(byCat);
     $('.detail .note').textContent = 'NYPD places each complaint at the nearest intersection or mid-block, so a hexagon counts the complaints snapped inside it. Rape and sex crimes are never placed on the map.';
   }
@@ -731,7 +798,8 @@ async function renderSelection(ticket) {
 
 /** Address or corner: complaints within 200 m, compared with 200 m circles every 100 m over
  *  all of NYC (compare.json). */
-async function renderPoint(sel, ticket, compare, top, sum) {
+async function renderPoint(sel, ticket, base, top, sum) {
+  const compare = base;
   const [lon, lat] = sel.lngLat;
   const box = (m) => `lat BETWEEN ${lat - degLat(m)} AND ${lat + degLat(m)} AND lon BETWEEN ${lon - degLon(m)} AND ${lon + degLon(m)}`;
   const near = (rows) => rows.filter((p) => meters(sel.lngLat, [p.lon, p.lat]) <= RADIUS_M);
@@ -747,33 +815,26 @@ async function renderPoint(sel, ticket, compare, top, sum) {
   const total = sum(byCat);
   const previous = compare ? sum(near(prevLoc)) : null;
   const fair = fairSeries();
-  let index = fig('Compared with typical', '—', fair.why, false, 'Complaints within 200 m ÷ the median 200 m circle in NYC.');
-  let pctl = fig('Percentile', '—', fair.why, false, 'Share of NYC 200 m circles with fewer complaints.');
+  let index = { value: '—', note: fair.why, help: 'Complaints within 200 m ÷ the median 200 m circle in NYC.' };
   if (!fair.why) {
     const P = cmp.point[fair.type][fair.series];
     const x = total / fair.years;
     const circles = fmt(cmp.grid_points);
     index = P[50] > 0
-      ? fig('Compared with typical', fmtIndex(x / P[50]), 'the typical 200 m circle in NYC', false,
-        `Complaints within 200 m ÷ the median of ${circles} circles of 200 m centered every 100 m on land, same offense types and ${fair.series === 'avg' ? 'yearly average' : 'year'} (median: ${fmt(P[50])}).`)
-      : fig('Compared with typical', 'n/a', 'the typical circle has none');
-    pctl = fig('Percentile', ordinal(shareBelow(P, x)), 'among 200 m circles in NYC', false,
-      `Share of the ${circles} 200 m circles across NYC with fewer complaints.`);
+      ? { value: fmtIndex(x / P[50]), note: `${ordinal(shareBelow(P, x))} percentile, 200 m circles`, words: `${fmtIndex(x / P[50])} the typical 200 m circle in NYC`,
+        help: `Complaints within 200 m ÷ the median of ${circles} circles of 200 m centered every 100 m on land, same offense types and ${fair.series === 'avg' ? 'yearly average' : 'year'} (median: ${fmt(P[50])}). Percentile: share of those circles with fewer complaints.` }
+      : { value: 'n/a', note: 'the typical circle has none' };
   }
   const nta = featureAt(ntaGeo, sel.lngLat);
   renderHeader(sel.label, `Within ${RADIUS_M}&nbsp;m of this ${sel.corner ? 'corner' : 'address'}${nta ? ` in <button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>` : ''}`);
-  showFigures([
-    fig(`Within ${RADIUS_M}&nbsp;m`, fmt(total), 'complaints'),
-    index,
-    fig('Most frequent', top(byCat), '', true),
-    pctl,
-  ], changeNote(total, previous, compare));
+  showSummary({ total, totalNote: `within ${RADIUS_M}&nbsp;m`, base: base && { ...base, n: previous }, label: 'Compared with typical', ratio: index });
   renderBars(byCat);
   $('.detail .note').textContent = 'Counts complaints NYPD placed within 200 m (about 2 blocks); NYPD places them at the nearest intersection or mid-block, and never places rape and sex crimes on the map. Addresses are located from the City\'s street centerline house-number ranges.';
 }
 
 /** Whole street: complaints within 30 m of its centerline, as a rate per 100 m of street. */
-async function renderStreet(sel, ticket, compare, top, sum) {
+async function renderStreet(sel, ticket, base, top, sum) {
+  const compare = base;
   const s = streetById(sel.id);
   const [byCat, prev, busiest] = await Promise.all([
     query(`SELECT cat, sum(n)::INTEGER AS n FROM street_blocks WHERE street = ${sel.id} AND ${where()} GROUP BY 1`),
@@ -792,26 +853,18 @@ async function renderStreet(sel, ticket, compare, top, sum) {
   const short = s.length < cmp.short_street_m;
   const fair = fairSeries();
   const rateText = (r) => (r >= 10 ? fmt(r) : r.toFixed(1));
-  let pctl;
-  if (short) pctl = fig('Percentile', '—', 'streets under 300 m are not ranked');
-  else if (fair.why) pctl = fig('Percentile', '—', fair.why);
-  else {
-    const P = cmp.street[fair.type][fair.series];
-    pctl = fig('Percentile', ordinal(shareBelow(P, rate / fair.years)), 'among NYC streets, per 100 m', false,
-      'Share of NYC streets 300 m or longer with a lower rate of complaints per 100 m.');
-  }
+  let pctlNote;
+  if (short) pctlNote = 'under 300 m, not ranked';
+  else if (fair.why) pctlNote = '';
+  else pctlNote = `${ordinal(shareBelow(cmp.street[fair.type][fair.series], rate / fair.years))} percentile, NYC streets`;
+  const index = cityRate > 0
+    ? { value: fmtIndex(rate / cityRate), note: pctlNote || 'the street average per 100 m', words: `${fmtIndex(rate / cityRate)} the NYC street average per 100 m`,
+      help: `Complaints per 100 m of this street ÷ all complaints on NYC streets per 100 m of street (${rateText(cityRate)}). Percentile: share of NYC streets 300 m or longer with a lower rate.` }
+    : { value: 'n/a' };
   const ntas = s.nNtas > 3 ? `${s.nNtas} neighborhoods` : s.ntas.map((c) => meta.ntas[c]?.name).filter(Boolean).join(', ');
   renderHeader(s.name, `Street in ${meta.boroughs[s.boro]}, ${fmtLength(s.length)} long${ntas ? `, through ${ntas}` : ''}`);
-  const notes = [changeNote(total, prev[0]?.n ?? 0, compare)];
-  if (busiest[0]?.n) notes.push(`Busiest block: numbers ${blockLabel(busiest[0].block)} (${fmt(busiest[0].n)})`);
-  showFigures([
-    fig('Complaints', fmt(total), `${rateText(rate)} per 100 m`),
-    cityRate > 0 ? fig('Compared with typical', fmtIndex(rate / cityRate), 'the NYC street average per 100 m', false,
-      `Complaints per 100 m of this street ÷ all complaints on NYC streets per 100 m of street (${rateText(cityRate)}).`)
-      : fig('Compared with typical', 'n/a'),
-    fig('Most frequent', top(byCat), '', true),
-    pctl,
-  ], notes.filter(Boolean).join('\n'));
+  showSummary({ total, totalNote: `${rateText(rate)} per 100 m`, base: base && { ...base, n: prev[0]?.n ?? 0 }, ratio: index,
+    notes: busiest[0]?.n ? [`Busiest block: numbers ${blockLabel(busiest[0].block)} (${fmt(busiest[0].n)}).`] : [] });
   renderBars(byCat);
   $('.detail .note').textContent = 'Complaints within 30 m of the street centerline; at an intersection they count for every street that meets there, also in the NYC average.'
     + (short || total < 20 ? ' This street is short or has few complaints, so each case moves the numbers a lot.' : '');
@@ -1001,18 +1054,21 @@ async function refresh() {
   const ticket = ++pending;
   // First visit: until the engine has downloaded, a new filter can't be answered yet; say so.
   if (!db.engineIsReady() && document.body.dataset.ready) $('#summary-sub').textContent = 'Loading the full data to apply this…';
-  const compare = comparisonOf(state.period);
-  const [hex, byLt, byCat, previous, byPct, byBoro] = await Promise.all([
+  const base = baselineOf(state.period);
+  const [hex, byLt, byCatAll, previous, byPct, byBoro] = await Promise.all([
     query(`SELECT q, r, sum(n)::INTEGER AS n FROM hex WHERE ${where()} GROUP BY 1, 2`),
     query(`SELECT lt, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()} GROUP BY 1`),
-    query(`SELECT cat, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()} GROUP BY 1`),
-    compare
-      ? query(`SELECT sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where(compare.months)}`)
+    query(`SELECT cat, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${monthSql(monthsOf(state.period))} GROUP BY 1`),
+    base
+      ? query(`SELECT sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where(base.months)}`)
       : Promise.resolve([{ n: 0 }]),
     precinctGeo ? query(`SELECT pct, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()} GROUP BY 1`) : [],
     boroughGeo ? query(`SELECT boro, sum(n)::INTEGER AS n FROM agg_precinct WHERE boro BETWEEN 1 AND 5 AND ${where()} GROUP BY 1`) : [],
   ]);
   if (ticket !== pending) return;      // a newer refresh started; drop this one
+  catCounts = new Map(byCatAll.map((r) => [r.cat, r.n]));
+  const byCat = byCatAll.filter((r) => state.cats.has(r.cat));
+  renderCategories();
   setTint(selectionGroup());                      // before both layers, so they change color together
   const years = daysOf(monthsOf(state.period)) / 365.25;
   if (precinctGeo) {
@@ -1028,7 +1084,7 @@ async function refresh() {
   const panel = $('.detail');
   if (state.selected?.kind === 'city') {
     renderHeader('New York City', `All five boroughs, ${fmt(meta.totals.population_2020)} residents`);
-    renderCity({ total, precinctOnly: lt[1] ?? 0, previous: previous[0]?.n, compare, days: daysOf(monthsOf(state.period)) });
+    renderCity({ total, precinctOnly: lt[1] ?? 0, previous: previous[0]?.n ?? 0, base, days: daysOf(monthsOf(state.period)) });
     renderBars(byCat);
     $('.detail .note').textContent = CITY_NOTE;
   } else if (state.selected) {
@@ -1037,9 +1093,8 @@ async function refresh() {
   if (ticket !== pending) return;
   await renderCharts(ticket);
   if (ticket !== pending) return;
-  if (panel.hidden !== !state.selected) {          // opening: always start expanded
+  if (panel.hidden !== !state.selected) {
     panel.hidden = !state.selected;
-    if (state.selected) panel.querySelector('.block-toggle').expand();
   }
   const noPrecinct = byPct.find((r) => r.pct < 0)?.n ?? 0;
   const noBorough = boroughGeo ? total - byBoro.reduce((t, r) => t + r.n, 0) : 0;
@@ -1065,50 +1120,112 @@ function renderNotice({ drawable, total }) {
   el.hidden = false;
 }
 
-// ---------- view switch (3D hexagons / Precincts), in the legend block
-function setupViewSwitch() {
-  const buttons = document.querySelectorAll('.view-switch button');
-  const sync = () => buttons.forEach((b) => b.setAttribute('aria-checked', String(state.view === b.dataset.view)));
-  buttons.forEach((b) => b.addEventListener('click', async () => {
-    if (state.view === b.dataset.view) return;
-    state.view = b.dataset.view;
-    sync();
-    savePref('view', state.view);
-    document.body.dataset.view = state.view;
-    if (state.view === 'precincts') {
-      await ensurePrecincts();
-      await refresh();                            // fills the precincts before they fade in
+// ---------- Areas (Hot spots | Precincts | Boroughs) and Tilt, top right of the map
+const areaOf = () => (state.view === 'hex' ? 'hex' : state.unit2d);
+function setupAreas() {
+  const buttons = [...document.querySelectorAll('.areas button')];
+  const tilt = $('.tilt-toggle');
+  const sync = () => {
+    buttons.forEach((b) => { const on = b.dataset.area === areaOf(); b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; });
+    tilt.hidden = state.view !== 'hex';
+    tilt.setAttribute('aria-pressed', String(state.tilt));
+    tilt.title = state.tilt ? 'Show the map flat' : 'Tilt the map to show columns';
+  };
+  const choose = async (area) => {
+    if (area === areaOf()) return;
+    const view = area === 'hex' ? 'hex' : 'precincts';
+    if (area !== 'hex' && state.unit2d !== area) {
+      state.unit2d = area;
+      savePref('unit2d', area);
+      setUnit2d(area);
     }
-    setView(state.view);
-    if (state.view === 'hex') refresh();
-  }));
-  sync();
-  // In 2D: a switch between precincts and boroughs (same view, one level up or down).
-  const unit = $('.unit-switch');
-  const syncUnit = () => unit.setAttribute('aria-checked', String(state.unit2d === 'borough'));
-  unit.addEventListener('click', () => {
-    state.unit2d = state.unit2d === 'borough' ? 'precinct' : 'borough';
-    savePref('unit2d', state.unit2d);
-    syncUnit();
-    setUnit2d(state.unit2d);
-    refresh();                                      // the summary line names the unit
+    savePref('view', view);
+    if (view !== state.view) {
+      state.view = view;
+      document.body.dataset.view = view;
+      sync();
+      if (view === 'precincts') { await ensurePrecincts(); await refresh(); }   // fill before they fade in
+      setView(view, { tilt: state.tilt });
+      if (view === 'hex') refresh();
+    } else { sync(); refresh(); }                    // the dek names the unit
+    sync();
+  };
+  buttons.forEach((b) => (b.onclick = () => choose(b.dataset.area)));
+  $('.areas').addEventListener('keydown', (e) => {   // radio group: arrows choose
+    const d = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+    if (!d) return;
+    const i = buttons.findIndex((b) => b.dataset.area === areaOf());
+    const next = buttons[(i + d + buttons.length) % buttons.length];
+    choose(next.dataset.area); next.focus(); e.preventDefault();
   });
-  syncUnit();
+  tilt.onclick = () => {
+    state.tilt = !state.tilt;
+    savePref('tilt', state.tilt ? 'on' : 'off');
+    setTilt(state.tilt);
+    sync();
+  };
+  sync();
 }
 
-// ---------- theme switch (Night / Light), bottom left
-function setupThemeSwitch() {
-  const buttons = document.querySelectorAll('.theme-switch button');
-  const sync = () => buttons.forEach((b) =>
-    b.setAttribute('aria-checked', String(document.documentElement.dataset.theme === b.dataset.value)));
-  buttons.forEach((b) => (b.onclick = () => {
-    if (document.documentElement.dataset.theme === b.dataset.value) return;
-    document.documentElement.dataset.theme = b.dataset.value;
-    savePref('theme:v2', b.dataset.value);
-    sync();
-    setTheme(b.dataset.value);
-  }));
-  sync();
+// ---------- theme: the system setting until the visitor picks one with the sun/moon button
+function setupTheme() {
+  const media = matchMedia('(prefers-color-scheme: dark)');
+  const apply = (t) => {
+    if (document.documentElement.dataset.theme === t) return;
+    document.documentElement.dataset.theme = t;
+    setTheme(t);
+    syncButton();
+    if (state.selected) refresh();                   // chart and bar colors follow the theme
+  };
+  const button = addMapButton({ className: 'theme-btn', onClick: () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    savePref('theme:v3', next);
+    apply(next);
+  } });
+  function syncButton() {
+    const label = document.documentElement.dataset.theme === 'dark' ? 'Use light map' : 'Use dark map';
+    button.setAttribute('aria-label', label);
+    button.title = label;
+  }
+  syncButton();
+  media.addEventListener('change', () => { if (!pref('theme:v3', null) && !new URLSearchParams(location.search).has('theme')) apply(media.matches ? 'dark' : 'light'); });
+}
+
+// ---------- the left sheet: full (320 px) or a 56 px rail; the dek moves onto the map as a card
+function setupSheet() {
+  const toggle = $('.sheet-toggle');
+  const dek = $('#dek');
+  const set = (rail, { focus } = {}) => {
+    document.body.dataset.sheet = rail ? 'rail' : 'full';
+    toggle.setAttribute('aria-expanded', String(!rail));
+    (rail ? $('.dek-card') : $('.dek-slot')).append(dek);
+    $('.dek-card').hidden = !rail;
+    savePref('sheet', rail ? 'rail' : 'full');
+    if (focus) focus();
+    requestAnimationFrame(() => renderPeriod());
+  };
+  toggle.onclick = () => { set(true); document.querySelector('[data-rail="search"]').focus(); };
+  document.querySelector('[data-rail="search"]').onclick = () => set(false, { focus: () => $('#search').focus() });
+  document.querySelector('[data-rail="filters"]').onclick = () => set(false, { focus: () => document.querySelector('#period-presets [aria-checked="true"]')?.focus() });
+  set(pref('sheet', 'full') === 'rail');
+  // "/" focuses the search box from anywhere but a text field.
+  addEventListener('keydown', (e) => {
+    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.closest?.('input, select, textarea, [contenteditable]')) return;
+    e.preventDefault();
+    if (document.body.dataset.sheet === 'rail') set(false);
+    $('#search').focus();
+  });
+}
+
+// ---------- the key's "?": a short explanation, with a link to the about page
+function setupKeyHelp() {
+  const q = $('#legend-q');
+  const box = $('#legend-explain');
+  const show = (open) => { box.hidden = !open; q.setAttribute('aria-expanded', String(open)); };
+  q.onclick = () => show(box.hidden);
+  addEventListener('pointerdown', (e) => { if (!box.hidden && !e.target.closest('.legend')) show(false); });
+  return { open: () => !box.hidden, close: () => { show(false); q.focus(); } };
 }
 
 // Complaint locations for the zoomed-in view: one row per snapped location, with its count and
@@ -1125,16 +1242,16 @@ function loadPoints([west, south, east, north]) {
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  // Paper (light) is the default look; Night is a choice the visitor makes, then remembered.
-  const theme = params.get('theme') ?? pref('theme:v2', 'light');
-  document.documentElement.dataset.theme = theme;
-  setupThemeSwitch();
-  setupBlocks();
+  // Theme: set before first paint in index.html (the visitor's choice, else the system setting).
+  const theme = document.documentElement.dataset.theme;
   state.view = params.get('view') ?? pref('view', 'hex');
   state.unit2d = pref('unit2d', 'precinct');       // what the 2D view shows: precincts or boroughs
   if (!['hex', 'precincts'].includes(state.view)) state.view = 'hex';
+  if (!['precinct', 'borough'].includes(state.unit2d)) state.unit2d = 'precinct';
+  state.tilt = pref('tilt', 'on') !== 'off';
   document.body.dataset.view = state.view;
-  setupViewSwitch();
+  setupSheet();
+  setupStrip();
   renderPeriod();
 
   // The engine (DuckDB, ~35 MB the first time) loads in the background while the map and the
@@ -1190,7 +1307,14 @@ async function main() {
     if (it.level === 'precinct') return selectPrecinctNumber(it.code);
     return selectNta(it.code, { move: true });
   }, () => { loadStreets(loadJson); loadCompare(); });
-  addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.selected) clearSelection(); });
+  // Esc closes the innermost thing open: the key's explanation, then the details panel (focus goes
+  // back to what opened it).
+  addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (keyHelp?.open()) { keyHelp.close(); return; }
+    if (document.activeElement?.closest('.search') && !$('#search-results').hidden) return;   // search handles its own Esc
+    if (state.selected) clearSelection();
+  });
   state.cats = new Set(meta.categories.map((c) => c.code));
   renderCategories();
   setupCategoryActions();
@@ -1199,6 +1323,7 @@ async function main() {
   await Promise.all(['600 16px "Newsreader Variable"', '600 12px "Schibsted Grotesk Variable"'].map((f) => document.fonts.load(f).catch(() => null)));
   const map = await createMap($('#map'), {
     view: state.view,
+    tilt: state.tilt,
     theme,
     grid: meta.grid,
     categories: meta.categories,
@@ -1209,6 +1334,10 @@ async function main() {
     query('SELECT cat, sum(n) FILTER (WHERE lt = 0)::INTEGER AS drawn FROM agg_precinct GROUP BY cat'),
   ]);
   state.notMapped = new Set(drawn.filter((d) => !d.drawn).map((d) => d.cat));
+  setupTheme();
+  setupAreas();
+  keyHelp = setupKeyHelp();
+  loadMonthly();
   renderCategories();
   setUniverse(cells);
   loadJson('boroughs.geojson').then((geo) => {
@@ -1230,6 +1359,7 @@ async function main() {
   if (params.has('db')) {                        // test mode only: hooks for headless tests
     window.__nycmap = map;
     window.__hexStats = hexStats;
+    window.__setSpan = (a, b) => { customOpen = false; setSpan(a, b); };
     window.__select = { city: selectCity, precinct: (pct) => (precinctGeo ? selectPrecinct(precinctUnit(pct)) : selectPrecinctNumber(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, point: selectPoint, street: selectStreet, clear: clearSelection };
   }
   await refresh();

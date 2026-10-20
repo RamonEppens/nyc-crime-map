@@ -16,7 +16,8 @@ setWorkerUrl(workerUrl);
 
 // 35° tilt (45° hid too much behind the tallest columns); phones start flat.
 const PHONE = matchMedia('(max-width: 767px)').matches;
-const VIEW = { center: [-73.965, 40.715], zoom: 11, pitch: PHONE ? 0 : 35, bearing: -12 };   // Manhattan/Brooklyn
+const TILT = 35;
+const VIEW = { center: [-73.965, 40.715], zoom: 11, pitch: PHONE ? 0 : TILT, bearing: -12 };   // Manhattan/Brooklyn
 const VIEW_2D = { center: [-73.94, 40.70], zoom: 10.1, pitch: 0, bearing: 0 };     // all five boroughs
 const VIEW_MS = 800;                // hexagons <-> precincts cross-fade and camera move
 const PAN_LIMITS = [[-74.6, 40.35], [-73.3, 41.05]];
@@ -26,6 +27,9 @@ const POINTS_MARGIN = 0.35;         // load points for the view plus 35% on each
 
 let map;
 let overlay;
+let tilted = true;                  // Hot spots: tilted (columns) or flat
+let attribEl = null;
+const NO_HOVER = matchMedia('(hover: none)');      // touch: no tooltips (a tap selects)
 let grid;
 let theme;
 let categories = [];
@@ -62,19 +66,21 @@ const smoothstep = (a, b, x) => {
 export async function createMap(container, opts) {
   ({ grid, theme, categories } = opts);
   state.view = opts.view ?? 'hex';
+  tilted = opts.tilt !== false && !PHONE;
   state.mix = state.view === 'precincts' ? 1 : 0;
   setGrid(grid);
   hooks = opts.hooks;
   map = new Map({
     container,
     style: await basemapStyle(theme),
-    ...(state.view === 'precincts' ? VIEW_2D : VIEW),
+    ...(state.view === 'precincts' ? VIEW_2D : { ...VIEW, pitch: tilted ? TILT : 0 }),
     maxBounds: PAN_LIMITS,
     maxPitch: 70,
     attributionControl: false,
   });
   map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
   map.addControl(new NavigationControl({ visualizePitch: true }), 'bottom-right');
+  attribEl = container.querySelector('.maplibregl-ctrl-attrib');
 
   overlay = new MapboxOverlay({ interleaved: false, layers: [], getTooltip: tooltip });
   map.addControl(overlay);
@@ -227,7 +233,8 @@ export function precinctUnit(pct) {
 }
 
 /** 'hex' (3D hexagons) or 'precincts' (flat, by NYPD precinct): cross-fade and move the camera. */
-export function setView(view) {
+export function setView(view, { tilt = tilted } = {}) {
+  tilted = tilt;
   if (view === state.view) return;
   state.view = view;
   const from = state.mix;
@@ -243,13 +250,38 @@ export function setView(view) {
   requestAnimationFrame(step);
   if (view === 'precincts') {
     lockFlat(true);
-    map.easeTo({ pitch: 0, bearing: 0, zoom: Math.min(map.getZoom(), 12), duration: VIEW_MS });
+    map.easeTo({ pitch: 0, bearing: 0, zoom: Math.min(map.getZoom(), 12), duration: motion(VIEW_MS) });
   } else {
     lockFlat(false);
-    map.easeTo({ pitch: VIEW.pitch, bearing: VIEW.bearing, duration: VIEW_MS });
+    map.easeTo({ pitch: tilted && !PHONE ? TILT : 0, bearing: tilted ? VIEW.bearing : 0, duration: motion(VIEW_MS) });
   }
   updateBreaks();
 }
+
+/** Hot spots tilted (35°, columns) or flat (seen from above). */
+export function setTilt(on) {
+  tilted = on;
+  if (state.view !== 'hex') return;
+  map.easeTo({ pitch: on ? TILT : 0, duration: motion(700) });
+}
+
+/** A button in the bottom-right control stack, under zoom and compass and above the credits. */
+export function addMapButton({ className, onClick }) {
+  const box = document.createElement('div');
+  box.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = className;
+  button.innerHTML = '<span class="maplibregl-ctrl-icon" aria-hidden="true"></span>';
+  button.onclick = onClick;
+  box.append(button);
+  map.addControl({ onAdd: () => box, onRemove: () => box.remove() }, 'bottom-right');
+  if (attribEl) attribEl.before(box);
+  return button;
+}
+
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const motion = (ms) => (reduceMotion.matches ? 0 : ms);
 
 /** The precinct view is a flat map: no tilting or rotating. */
 function lockFlat(flat) {
@@ -347,27 +379,37 @@ export function setPin(lngLat) {
     const el = document.createElement('div');
     el.className = 'map-pin';
     el.setAttribute('aria-hidden', 'true');
+    el.innerHTML = '<svg viewBox="0 0 26 34"><path class="drop" d="M13 33C13 33 2 20.5 2 12.5a11 11 0 0 1 22 0C24 20.5 13 33 13 33z"/><circle class="eye" cx="13" cy="12.5" r="4"/></svg>';
     pin = new Marker({ element: el, anchor: 'bottom' });
   }
   pin.setLngLat(lngLat).addTo(map);
 }
 
-const PADDING = { top: 60, bottom: 60, left: 380, right: 440 };   // keeps clear of the column and the panel
+/** Camera padding that keeps clear of the left sheet and the details panel (both may change). */
+function padding() {
+  const left = (document.querySelector('.controls')?.getBoundingClientRect().right ?? 0) + 40;
+  const panel = document.querySelector('.detail');
+  const right = (panel && !panel.hidden ? panel.offsetWidth : 0) + 60;
+  const w = map.getContainer().clientWidth;
+  if (left + right > w - 120) return { top: 60, bottom: 60, left: 20, right: 20 };   // phones: the sheet is below
+  return { top: 70, bottom: 70, left, right };
+}
 /** Fly to a point (addresses, corners): close enough that the map shows complaint locations. */
 export function flyToPoint(lngLat, zoom = 15.8, duration = 1800) {
   // An offset, not padding: MapLibre keeps a flyTo padding and adds it to the next fitBounds,
   // which then cannot fit and silently does nothing.
-  map.flyTo({ center: lngLat, zoom, duration, offset: [(PADDING.left - PADDING.right) / 2, 0], essential: true });
+  const p = padding();
+  map.flyTo({ center: lngLat, zoom, duration: motion(Math.min(duration, 1500)), offset: [(p.left - p.right) / 2, 0], essential: true });
 }
 /** Fit a box [[w, s], [e, n]] (streets, areas). */
 export function fitTo(bounds, { maxZoom = 15, duration = 1600 } = {}) {
-  map.fitBounds(bounds, { padding: PADDING, maxZoom, duration, pitch: map.getPitch(), bearing: map.getBearing() });
+  map.fitBounds(bounds, { padding: padding(), maxZoom, duration: motion(Math.min(duration, 1500)), pitch: map.getPitch(), bearing: map.getBearing() });
 }
 
 /** Move the camera to show a bounding box [[w, s], [e, n]] without changing pitch or bearing. */
 export function showBounds(bounds) {
-  map.fitBounds(bounds, { padding: PADDING, maxZoom: 14,
-    pitch: map.getPitch(), bearing: map.getBearing(), duration: 900 });
+  map.fitBounds(bounds, { padding: padding(), maxZoom: 14,
+    pitch: map.getPitch(), bearing: map.getBearing(), duration: motion(900) });
 }
 
 // ---------- follow camera: while the pointer moves along a chart, the map glides to each block it
@@ -771,6 +813,7 @@ function ordinal(n) {
 }
 
 function tooltip({ object, layer }) {
+  if (NO_HOVER.matches) return null;               // touch: one tap selects, no tooltip
   if (layer?.id === 'precincts' && object) {
     const unit = precincts.units[object.u];
     return { className: 'deck-tooltip',
