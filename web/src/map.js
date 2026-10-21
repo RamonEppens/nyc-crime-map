@@ -410,6 +410,11 @@ export function setPin(lngLat) {
 
 /** Camera padding that keeps clear of the left sheet and the details panel (both may change). */
 function padding() {
+  const sheet = document.querySelector('.bsheet');
+  if (matchMedia('(max-width: 767px)').matches && sheet) {          // phones: keep clear of the bottom sheet
+    const h = Math.max(96, Math.min(sheet.getBoundingClientRect().height, innerHeight * 0.5));
+    return { top: 80, bottom: h + 16, left: 24, right: 24 };
+  }
   const left = (document.querySelector('.controls')?.getBoundingClientRect().right ?? 0) + 40;
   const panel = document.querySelector('.detail');
   const right = (panel && !panel.hidden ? panel.offsetWidth : 0) + 60;
@@ -422,7 +427,7 @@ export function flyToPoint(lngLat, zoom = 15.8, duration = 1800) {
   // An offset, not padding: MapLibre keeps a flyTo padding and adds it to the next fitBounds,
   // which then cannot fit and silently does nothing.
   const p = padding();
-  map.flyTo({ center: lngLat, zoom, duration: motion(Math.min(duration, 1500)), offset: [(p.left - p.right) / 2, 0], essential: true });
+  map.flyTo({ center: lngLat, zoom, duration: motion(Math.min(duration, 1500)), offset: [(p.left - p.right) / 2, (p.top - p.bottom) / 2], essential: true });
 }
 /** Fit a box [[w, s], [e, n]] (streets, areas). */
 export function fitTo(bounds, { maxZoom = 15, duration = 1600 } = {}) {

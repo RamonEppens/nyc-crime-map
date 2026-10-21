@@ -30,6 +30,11 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 6l-6 6 6 6M20 4v16"/></svg>
           </button>
         </header>
+        <!-- Phones: the sheet opens full screen as "Filters" -->
+        <div class="phone-head">
+          <h2 id="filters-title">Filters</h2>
+          <button class="icon-btn filters-close" type="button" aria-label="Close filters"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
         <!-- Rail (collapsed): logo, search, filters -->
         <div class="rail">
           <button class="icon-btn rail-btn" type="button" data-rail="search" aria-label="Search" title="Search">
@@ -86,7 +91,30 @@
             <p class="freshness">Data through Dec 2025 · NYC Open Data, NYPD Complaint Data Historic, updated quarterly · Independent project, not affiliated with the City of New York or the NYPD.</p>
           </footer>
         </div>
+        <div class="phone-foot">
+          <button type="button" class="chip theme-phone">Use dark map</button>
+          <button type="button" class="show-results">Show results</button>
+        </div>
       </nav>
+      <!-- Phones: a floating search bar and a bottom sheet (peek, half, full) -->
+      <div class="phone-bar">
+        <img class="logo" src="logo.png" alt="NYC Crime Map" width="32" height="32" />
+        <div class="phone-search-slot"></div>
+        <button type="button" class="filters-open" aria-label="Filters" aria-haspopup="dialog">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+          <span class="badge" hidden></span>
+        </button>
+      </div>
+      <section class="bsheet" aria-label="Summary and details" data-snap="peek">
+        <button type="button" class="bs-handle" aria-expanded="false" aria-label="Show more"></button>
+        <div class="bs-peek"></div>
+        <div class="bs-body">
+          <div class="bs-foot">
+            <a class="link" href="about.html">About this data</a>
+            <p class="freshness">Data through Dec 2025 · NYC Open Data, NYPD Complaint Data Historic, updated quarterly · Independent project, not affiliated with the City of New York or the NYPD.</p>
+          </div>
+        </div>
+      </section>
       <!-- The dek, when the sheet is collapsed (the same element moves here) -->
       <div class="dek-card" hidden></div>
 

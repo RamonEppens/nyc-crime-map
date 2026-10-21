@@ -254,10 +254,10 @@ function renderCategories() {
       html += `<div class="cat-row">
         <button type="button" class="cat-check" role="checkbox" aria-checked="${state.cats.has(c.code)}" data-code="${c.code}" data-focus="c:${c.code}"
           ${hidden ? `aria-description="Location withheld by NYPD: counted in totals, not drawn"` : ''}>
-          <span class="box" aria-hidden="true"></span><span class="name">${c.label}${hidden ? ' <span class="mark" aria-hidden="true">†</span>' : ''}</span><span class="cat-n">${count(v)}</span></button>
+          <span class="box" aria-hidden="true"></span><span class="name">${c.label}${hidden ? ' <span class="mark" aria-hidden="true">†</span>' : ''}</span><span class="cat-n">${count(v)}</span>
+          <span class="cat-bar" aria-hidden="true"><i style="width:${(100 * v) / max}%"></i></span></button>
         ${only([c.code], c.label.toLowerCase())}
         <span class="cat-fold" aria-hidden="true" style="visibility:hidden"></span>
-        <span class="cat-bar" aria-hidden="true"><i style="width:${(100 * v) / max}%"></i></span>
       </div>`;
     }
     html += '</div>';
@@ -1148,7 +1148,10 @@ async function refresh() {
   if (ticket !== pending) return;
   if (panel.hidden !== !state.selected) {
     panel.hidden = !state.selected;
+    document.body.dataset.selected = String(!!state.selected);
+    if (isPhone()) setSnap(state.selected ? 'half' : 'peek');          // details open at half height
   }
+  updateBadge();
   const noPrecinct = byPct.find((r) => r.pct < 0)?.n ?? 0;
   const noBorough = boroughGeo ? total - byBoro.reduce((t, r) => t + r.n, 0) : 0;
   renderSummary({ total, precinctOnly: lt[1] ?? 0, none: lt[2] ?? 0, noPrecinct, noBorough });
@@ -1273,6 +1276,125 @@ function setupSheet() {
   });
 }
 
+// ---------- phones (< 768 px): the same pieces, rearranged into a floating search bar, a bottom
+// sheet (peek, half, full) and a full-screen filters view (decision #73)
+const PHONE_MQ = matchMedia('(max-width: 767px)');
+const isPhone = () => PHONE_MQ.matches;
+let sheetSnap = 'peek';
+function setSnap(snap) {
+  sheetSnap = snap;
+  const sheet = $('.bsheet');
+  sheet.dataset.snap = snap;
+  sheet.style.removeProperty('--bs-h');
+  document.body.dataset.snap = snap;
+  const h = $('.bs-handle');
+  h.setAttribute('aria-expanded', String(snap !== 'peek'));
+  h.setAttribute('aria-label', snap === 'full' ? 'Show less' : 'Show more');
+}
+function placeForPhone() {
+  const phone = isPhone();
+  document.body.dataset.phone = String(phone);
+  const search = $('.search'), dek = $('#dek'), areas = $('.areas'), detail = $('.detail');
+  if (phone) {
+    $('.phone-search-slot').append(search);
+    $('.bs-peek').append(areas);
+    let slot = $('.bs-body .dek-slot');
+    if (!slot) { slot = document.createElement('div'); slot.className = 'dek-slot'; $('.bs-body').prepend(slot); }
+    slot.append(dek, $('.progress'));
+    $('.bs-foot').before(detail);
+    document.body.dataset.sheet = 'full';
+    $('.dek-card').hidden = true;
+  } else {
+    $('.sheet-body .dek-slot').append(dek);
+    $('.sheet-body .dek-slot').after($('.progress'));
+    $('.progress').after(search);
+    $('.chrome-tr').prepend(areas);
+    $('.map-wrap').append(detail);
+    document.body.dataset.sheet = pref('sheet', 'full') === 'rail' ? 'rail' : 'full';
+    if (document.body.dataset.sheet === 'rail') { $('.dek-card').append(dek); $('.dek-card').hidden = false; }
+  }
+  setSnap(phone && state.selected ? 'half' : 'peek');
+}
+function setupPhone() {
+  placeForPhone();
+  PHONE_MQ.addEventListener('change', () => { placeForPhone(); renderPeriod(); });
+  // The handle: tap to cycle peek -> half -> full -> peek; drag to any height, then snap.
+  const sheet = $('.bsheet');
+  const handle = $('.bs-handle');
+  let drag = null;
+  const start = (e) => {
+    if (e.target.closest('.bs-peek button')) return;   // the Areas buttons stay buttons
+    drag = { y: e.clientY, h: sheet.getBoundingClientRect().height, moved: false };
+    sheet.classList.add('dragging');
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const move = (e) => {
+    if (!drag) return;
+    const dy = drag.y - e.clientY;
+    if (Math.abs(dy) > 6) drag.moved = true;
+    const h = Math.max(96, Math.min(innerHeight * 0.92, drag.h + dy));
+    sheet.style.setProperty('--bs-h', `${h}px`);
+  };
+  const end = () => {
+    if (!drag) return;
+    sheet.classList.remove('dragging');
+    const h = sheet.getBoundingClientRect().height;
+    const wasTap = !drag.moved;
+    drag = null;
+    if (wasTap) return;
+    handle.dataset.dragged = '1';
+    setTimeout(() => delete handle.dataset.dragged, 0);
+    const snaps = [['peek', 96], ['half', innerHeight * 0.5], ['full', innerHeight * 0.92]];
+    setSnap(snaps.reduce((a, b) => (Math.abs(b[1] - h) < Math.abs(a[1] - h) ? b : a))[0]);
+  };
+  for (const el of [handle, $('.bs-peek')]) {
+    el.addEventListener('pointerdown', start);
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  }
+  handle.addEventListener('click', () => {
+    if (handle.dataset.dragged) return;
+    setSnap({ peek: 'half', half: 'full', full: 'peek' }[sheetSnap]);
+  });
+  // Filters: full screen, "Show results" (or Esc, or ×) goes back to the map.
+  const opener = $('.filters-open');
+  const openFilters = () => {
+    document.body.dataset.filters = 'open';
+    $('#sheet').setAttribute('role', 'dialog');
+    $('#sheet').setAttribute('aria-modal', 'true');
+    $('#sheet').setAttribute('aria-labelledby', 'filters-title');
+    $('.filters-close').focus();
+  };
+  const closeFilters = () => {
+    delete document.body.dataset.filters;
+    $('#sheet').removeAttribute('role');
+    $('#sheet').removeAttribute('aria-modal');
+    $('#sheet').removeAttribute('aria-labelledby');
+    opener.focus();
+  };
+  opener.onclick = openFilters;
+  $('.filters-close').onclick = closeFilters;
+  $('.show-results').onclick = closeFilters;
+  phoneFilters = { open: () => document.body.dataset.filters === 'open', close: closeFilters };
+  // Theme toggle in the filters footer (the map button is hidden on phones)
+  const themeBtn = $('.theme-phone');
+  const syncTheme = () => { themeBtn.textContent = document.documentElement.dataset.theme === 'dark' ? 'Use light map' : 'Use dark map'; };
+  themeBtn.onclick = () => { document.querySelector('.theme-btn')?.click(); syncTheme(); };
+  syncTheme();
+}
+let phoneFilters = null;
+/** Phones: the filter button's badge counts the filters changed from the defaults. */
+function updateBadge() {
+  const b = $('.filters-open .badge');
+  if (!b || !meta) return;
+  const d = defaultPeriod();
+  const n = (state.cats.size !== meta.categories.length ? 1 : 0) + (labelOf(state.period) !== labelOf(d) ? 1 : 0);
+  b.hidden = !n;
+  b.textContent = String(n);
+  $('.filters-open').setAttribute('aria-label', n ? `Filters, ${n} changed` : 'Filters');
+}
+
 // ---------- the key's "?": a short explanation, with a link to the about page
 function setupKeyHelp() {
   const q = $('#legend-q');
@@ -1306,6 +1428,7 @@ async function main() {
   state.tilt = pref('tilt', 'on') !== 'off';
   document.body.dataset.view = state.view;
   setupSheet();
+  setupPhone();
   setupStrip();
   renderPeriod();
 
@@ -1370,6 +1493,7 @@ async function main() {
   addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (keyHelp?.open()) { keyHelp.close(); return; }
+    if (phoneFilters?.open()) { phoneFilters.close(); return; }
     if (document.activeElement?.closest('.search') && !$('#search-results').hidden) return;   // search handles its own Esc
     if (state.selected) clearSelection();
   });
