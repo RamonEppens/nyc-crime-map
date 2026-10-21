@@ -134,7 +134,7 @@ function renderPeriod() {
 function drawStrip(span, label) {
   const el = $('#strip');
   const svg = el.querySelector('svg');
-  const w = el.clientWidth || 280, h = 40, n = N_MONTHS;
+  const w = el.clientWidth || 280, h = el.clientHeight || 40, n = N_MONTHS;
   const bw = w / n;
   const max = monthly ? Math.max(1, ...monthly) : 1;
   let bars = `<rect class="band" x="${span[0] * bw}" y="0" width="${(span[1] - span[0] + 1) * bw}" height="${h}"/>`;
@@ -621,7 +621,14 @@ function selectCity() {
   setSelection(null);
   refresh();
 }
+// Focus: a panel opened from the keyboard (search, the dek's total) takes focus on its heading;
+// closing it gives focus back to what opened it. A click on the map moves no focus.
+let opener = null;
+let focusPanel = false;
+function openedBy(el, keyboard = true) { opener = el; focusPanel = keyboard; }
 function clearSelection() {
+  const back = opener;
+  opener = null;
   state.selected = null;
   setPanelView('details');
   $('#search').value = '';
@@ -629,9 +636,11 @@ function clearSelection() {
   setSelection(null);
   setPin(null);
   refresh();
+  if (back?.isConnected && back.offsetParent !== null) { back.dataset.quiet = '1'; back.focus(); }
 }
 
 function onPick(pick) {
+  opener = null; focusPanel = false;
   if (pick.kind === 'precinct') return selectPrecinct(pick.unit);
   if (pick.kind === 'borough') return selectBorough(pick.code);
   if (pick.kind === 'none') return clearSelection();
@@ -1151,6 +1160,7 @@ async function refresh() {
     document.body.dataset.selected = String(!!state.selected);
     if (isPhone()) setSnap(state.selected ? 'half' : 'peek');          // details open at half height
   }
+  if (state.selected && focusPanel) { focusPanel = false; $('.place').focus({ preventScroll: true }); }
   updateBadge();
   const noPrecinct = byPct.find((r) => r.pct < 0)?.n ?? 0;
   const noBorough = boroughGeo ? total - byBoro.reduce((t, r) => t + r.n, 0) : 0;
@@ -1460,7 +1470,11 @@ async function main() {
   };
   let redraw;
   new ResizeObserver(() => { clearTimeout(redraw); redraw = setTimeout(() => chartDraws.forEach((d) => d()), 60); }).observe($('.charts-list'));
-  $('#city-total').onclick = () => (state.selected?.kind === 'city' ? clearSelection() : selectCity());
+  $('#city-total').onclick = (e) => {
+    if (state.selected?.kind === 'city') return clearSelection();
+    openedBy(e.currentTarget, e.detail === 0);       // detail 0: Enter or Space
+    selectCity();
+  };
   $('.detail .updated').textContent = updatedLabel();
   const pctBoro = await query(`SELECT pct, arg_max(boro, n) AS boro FROM
     (SELECT pct, boro, sum(n) AS n FROM agg_precinct WHERE pct > 0 GROUP BY 1, 2) GROUP BY 1 ORDER BY 1`);
@@ -1482,6 +1496,7 @@ async function main() {
     boroName: (code) => meta.boroughs[code],
   };
   setupSearch($('#search'), $('#search-results'), searchDeps, (it) => {
+    openedBy($('#search'));
     if (it.type === 'point') return selectPoint(it.lngLat, it.label, it.kind === 'corner');
     if (it.type === 'street') return selectStreet(it.id);
     if (it.level === 'borough') return selectBorough(it.code);

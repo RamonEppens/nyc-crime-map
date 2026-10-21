@@ -103,7 +103,7 @@ body[data-sheet='rail'] .rail { display: flex; flex-direction: column; align-ite
 /* The dek: what the map shows right now, as one sentence. The number opens the city summary. */
 .dek { font-family: var(--serif); font-size: var(--fs-16); line-height: var(--lh-text); color: var(--ink); text-wrap: pretty; }
 .dek .total {
-  background: none; border: 0; padding: 0; cursor: pointer; font-weight: 650;
+  background: none; border: 0; padding: 1px 0; cursor: pointer; font-weight: 650;
   text-decoration: underline; text-decoration-color: var(--muted); text-underline-offset: 4px; text-decoration-thickness: 1px;
 }
 .dek .total:hover { text-decoration-color: var(--ink); }
@@ -178,8 +178,8 @@ body[data-stale='true'] #map { opacity: 0.6; }
 .block-value { margin-left: auto; font-size: var(--fs-13); color: var(--ink); font-weight: 600; }
 
 /* Chips and segmented controls: the current option is filled ink with paper text */
-.chips-row { display: flex; gap: 4px; }
-.chips-row .chip { flex: 1 1 auto; padding: 0 6px; }
+.chips-row { display: flex; gap: 8px; }
+.chips-row .chip { flex: 1 1 auto; padding: 0 4px; }
 .chip, .segmented button, .chrome-btn {
   height: var(--ctl); padding: 0 11px; border: 1px solid var(--muted); border-radius: var(--r); background: var(--sheet);
   cursor: pointer; font-size: var(--fs-13); font-weight: 600; color: var(--ink); white-space: nowrap;
@@ -260,7 +260,8 @@ select:hover { border-color: var(--ink); }
 .group-note { display: block; margin: -2px 0 2px; font-size: var(--fs-12); color: var(--muted); }
 .withheld { margin-top: 10px; }
 
-.sheet-foot { margin-top: auto; padding: 14px 0 18px; border-top: 1px solid var(--rule); font-size: var(--fs-13); }
+.sheet-foot { margin-top: auto; padding: 10px 0 18px; border-top: 1px solid var(--rule); font-size: var(--fs-13); }
+.sheet-foot .link, .bs-foot .link { display: inline-flex; align-items: center; min-height: var(--hit); }
 .freshness { margin-top: 6px; color: var(--muted); font-size: var(--fs-12); }
 
 /* ---------- map chrome */
@@ -561,5 +562,7 @@ select:hover { border-color: var(--ink); }
   .maplibregl-ctrl-bottom-right { right: 2px; bottom: calc(var(--bs-peek) + 2px); }
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl-group { display: none; }
   .map-notice { left: 50%; width: calc(100% - 32px); top: 40%; }
-  .more, .foot-actions button, .chart-more { min-height: 44px; }
+  .more, .foot-actions button, .chart-more { min-height: 44px; min-width: 44px; }
+  .strip { height: 44px; }
+  .figure .q { width: 44px; height: 44px; margin: -10px -10px -10px -4px; }
 }

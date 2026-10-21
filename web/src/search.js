@@ -444,7 +444,10 @@ export function setupSearch(input, list, deps, onChoose, onFocus) {
     render();
   };
   input.addEventListener('input', update);
-  input.addEventListener('focus', () => { onFocus?.(); if (!browsing) update(); });
+  // Focus given back by the page (closing a panel) doesn't reopen the suggestions; typing, a click or
+  // ArrowDown does.
+  input.addEventListener('focus', () => { onFocus?.(); if (!browsing && !input.dataset.quiet) update(); delete input.dataset.quiet; });
+  input.addEventListener('click', () => { if (list.hidden && !browsing) update(); });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { if (list.hidden) update(); else move(1); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { move(-1); e.preventDefault(); }
