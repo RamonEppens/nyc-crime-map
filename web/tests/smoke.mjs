@@ -45,6 +45,22 @@ for (const theme of ['dark', 'light']) {
   if (!ok) errors.push(`${theme}: legend ${legendHex} != ramp`);
   await page.screenshot({ path: `${out}/${theme}-z11.png` });
 
+  // Feedback within 100 ms: the chip and the dek's words change in the same frame; the map follows.
+  const fb = await page.evaluate(async () => {
+    const t = performance.now();
+    document.querySelector('#period-presets [data-preset="three"]').click();
+    await new Promise((r) => requestAnimationFrame(() => r()));
+    const ms = performance.now() - t;
+    const ok = /2023 to 2025/.test(document.querySelector('#summary-filter').textContent)
+      && document.querySelector('#period-presets [data-preset="three"]').getAttribute('aria-checked') === 'true';
+    const t2 = performance.now();
+    while (!/2023/.test(document.querySelector('.legend h2').textContent) && performance.now() - t2 < 20000) await new Promise((r) => setTimeout(r, 20));
+    return { ms: Math.round(ms), ok, repaint: Math.round(performance.now() - t) };
+  });
+  console.log(theme, 'filter feedback:', fb.ms, 'ms, repaint', fb.repaint, 'ms');
+  if (!fb.ok || fb.ms > 100) errors.push(`${theme}: filter feedback took ${fb.ms} ms or did not show`);
+  await page.click('#period-presets [data-preset="last"]');
+  await page.waitForTimeout(1200);
   // Filters: date modes, stepper, "only", None, All, hiding a block.
   const first = async () => (await page.textContent('#city-total')).replace(' complaints', '').trim();
   const total2025 = await first();

@@ -324,6 +324,12 @@ function renderLegend(spec = lastLegend) {
     const lo = rate ? breaks[i - 1] : breaks[i - 1] + 1;
     return lo === breaks[i] ? fmtB(lo) : `${fmtB(lo)}–${fmtB(breaks[i])}`;
   });
+  if (!breaks.length || breaks.some((b) => !Number.isFinite(b))) {     // nothing to classify
+    $('.legend-ramp').innerHTML = '';
+    $('.legend-labels').innerHTML = '<span>No complaints to show</span>';
+    $('.legend-few').hidden = true;
+    return;
+  }
   $('.legend-ramp').style.setProperty('--k', ramp.length);
   $('.legend-ramp').innerHTML = ramp.map((c) => `<span style="background:${c}"></span>`).join('');
   $('.legend-labels').innerHTML = ranges.map((r) => `<span>${tnum(r)}</span>`).join('');
@@ -364,6 +370,10 @@ function showSummary({ total, totalNote = '', ratio = { value: 'n/a' }, label = 
   if (ratio.words) parts.push(ratio.words);
   if (change.words) parts.push(change.words);
   $('.lead').textContent = `${parts.join(', ')}.`;
+  if (total === 0) {
+    $('.lead').innerHTML = `No complaints of this type here in ${periodLabel()}. <button type="button" class="chip reset-filters">Reset filters</button>`;
+    $('.lead .reset-filters').onclick = resetFilters;
+  }
   const tile = (l, v, note = '', help = '') => `<div class="figure"><div class="label">${l}${helpMark(help)}</div>
     <div class="value">${v}</div>${note ? `<div class="fnote">${note}</div>` : ''}</div>`;
   $('.figures').innerHTML = tile('Total', tnum(fmt(total)), totalNote || 'complaints')
@@ -1048,10 +1058,51 @@ async function renderCharts(ticket) {
     ? `<strong>Not shown</strong> ${report.hidden.map((h) => `${h.title}: ${h.why}.`).join(' ')}` : '';
 }
 
+// ---------- loading: a 2 px bar under the dek moves through the stages of the first load
+function progress(p) {
+  $('.progress i').style.setProperty('--p', `${p}%`);
+  document.body.dataset.loading = p < 100 ? 'true' : 'false';
+}
+let firstPaint = null;
+function markFirstPaint() {
+  if (firstPaint !== null) return;
+  firstPaint = Math.round(performance.now());
+  progress(100);
+  console.info(`[nycmap] first data paint: ${firstPaint} ms after navigation start`);
+  window.__firstPaint = firstPaint;
+}
+
+// Filters: the controls answer at once; if the map has not repainted 400 ms later, the old map
+// dims to 60% so it doesn't pass for the new answer.
+let staleTimer = 0;
+function markStale() {
+  clearTimeout(staleTimer);
+  staleTimer = setTimeout(() => { document.body.dataset.stale = 'true'; }, 400);
+}
+function clearStale() {
+  clearTimeout(staleTimer);
+  delete document.body.dataset.stale;
+}
+
+/** Back to the defaults: every offense type, 2025. */
+function resetFilters() {
+  state.cats = new Set(meta.categories.map((c) => c.code));
+  state.period = defaultPeriod();
+  customOpen = false;
+  renderPeriod();
+  renderCategories();
+  loadMonthly();
+  refresh();
+}
+
 // ---------- refresh everything for the current filters
 let pending = 0;
 async function refresh() {
   const ticket = ++pending;
+  if (document.body.dataset.ready) {
+    markStale();
+    $('#summary-filter').textContent = `in ${filterLabel()}.`;     // the words change at once, the number follows
+  }
   // First visit: until the engine has downloaded, a new filter can't be answered yet; say so.
   if (!db.engineIsReady() && document.body.dataset.ready) $('#summary-sub').textContent = 'Loading the full data to apply this…';
   const base = baselineOf(state.period);
@@ -1081,6 +1132,8 @@ async function refresh() {
   const lt = Object.fromEntries(byLt.map((r) => [r.lt, r.n]));
   const total = (lt[0] ?? 0) + (lt[1] ?? 0) + (lt[2] ?? 0);
   setHexagons(hex, periodLabel());
+  clearStale();
+  markFirstPaint();
   const panel = $('.detail');
   if (state.selected?.kind === 'city') {
     renderHeader('New York City', `All five boroughs, ${fmt(meta.totals.population_2020)} residents`);
@@ -1115,7 +1168,9 @@ function renderNotice({ drawable, total }) {
   } else if (total > 0) {
     el.innerHTML = '<strong>Nothing to draw for this selection</strong><p>These complaints have no location in the data. They are counted in the totals on the right.</p>';
   } else {
-    el.innerHTML = '<strong>No complaints for this selection</strong><p>Try another period or more offense types.</p>';
+    el.innerHTML = `<strong>No complaints of this type in ${periodLabel()}</strong>
+      <p>Choose more offense types or other dates.</p><button type="button" class="chip reset-filters">Reset filters</button>`;
+    el.querySelector('.reset-filters').onclick = resetFilters;
   }
   el.hidden = false;
 }
@@ -1257,7 +1312,10 @@ async function main() {
   // The engine (DuckDB, ~35 MB the first time) loads in the background while the map and the
   // controls come up; every query waits for it on its own.
   initDb();
+  progress(8);
+  const boroughsP = loadJson('boroughs.geojson');             // the veil and borough outlines, first thing on the map
   const [metaText, g] = await Promise.all([loadText('meta.json'), loadJson('nta.geojson')]);
+  progress(30);
   meta = JSON.parse(metaText);
   ntaGeo = g;
   if (!params.has('db')) await loadStartCache(metaText);   // first map without waiting for the engine
@@ -1321,6 +1379,7 @@ async function main() {
   if (state.view === 'precincts') await ensurePrecincts();
   // Map labels are drawn to a canvas atlas once, so the fonts must be ready before the map starts.
   await Promise.all(['600 16px "Newsreader Variable"', '600 12px "Schibsted Grotesk Variable"'].map((f) => document.fonts.load(f).catch(() => null)));
+  progress(45);
   const map = await createMap($('#map'), {
     view: state.view,
     tilt: state.tilt,
@@ -1329,6 +1388,7 @@ async function main() {
     categories: meta.categories,
     hooks: { onLegend: renderLegend, loadPoints, onPick },
   });
+  boroughsP.then((geo) => setMask(geo));          // veil and outlines as soon as they arrive, before data
   const [cells, drawn] = await Promise.all([
     query('SELECT DISTINCT q, r FROM hex ORDER BY q, r'),
     query('SELECT cat, sum(n) FILTER (WHERE lt = 0)::INTEGER AS drawn FROM agg_precinct GROUP BY cat'),
@@ -1340,9 +1400,9 @@ async function main() {
   loadMonthly();
   renderCategories();
   setUniverse(cells);
-  loadJson('boroughs.geojson').then((geo) => {
+  progress(65);
+  boroughsP.then((geo) => {
     boroughGeo ??= geo;
-    setMask(geo);                                   // veil outside NYC
     setBoroughShapes(geo, meta.boroughs);           // the 2D view by borough
     if (state.unit2d === 'borough') setUnit2d('borough');
     refresh();
@@ -1365,7 +1425,12 @@ async function main() {
   await refresh();
   // If the first map came from the start cache, ask again once the engine is ready (same numbers,
   // but now everything after this comes from the engine), then open the big remote tables.
-  whenEngineReady().then(async () => { if (db.usedStartCache) await refresh(); warmRemote(); });
+  whenEngineReady().then(async () => {
+    window.__engineReadyAt = Math.round(performance.now());
+    console.info(`[nycmap] engine ready: ${window.__engineReadyAt} ms after navigation start`);
+    if (db.usedStartCache) await refresh();
+    warmRemote();
+  });
 }
 
 main().catch((err) => {

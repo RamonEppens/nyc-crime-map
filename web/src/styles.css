@@ -114,6 +114,9 @@ body[data-sheet='rail'] .rail { display: flex; flex-direction: column; align-ite
 .progress { height: 2px; margin-top: 10px; background: var(--rule); overflow: hidden; }
 .progress i { display: block; height: 100%; width: var(--p, 0%); background: var(--ink); transition: width 200ms linear; }
 body:not([data-loading='true']) .progress { visibility: hidden; }
+#map { transition: opacity 150ms ease; }
+body[data-stale='true'] #map { opacity: 0.6; }
+.lead .reset-filters { margin-left: 6px; font-family: var(--sans); vertical-align: 1px; }
 
 /* Search: a 40 px box */
 .search { position: relative; display: flex; align-items: center; margin: 14px 0 4px; z-index: 3; }
@@ -284,6 +287,7 @@ select:hover { border-color: var(--ink); }
 .legend-ramp, .legend-labels { display: grid; grid-template-columns: repeat(var(--k, 6), auto); column-gap: 1px; }
 .legend-ramp span { height: 10px; }
 .legend-labels { margin-top: 4px; font-size: var(--fs-12); color: var(--ink); }
+.legend-labels span:only-child { grid-column: 1 / -1; text-align: left; color: var(--muted); }
 .legend-labels span { text-align: center; white-space: nowrap; padding: 0 3px; }
 .legend-few { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: var(--fs-12); color: var(--ink); }
 .legend-few[hidden] { display: none; }

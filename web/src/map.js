@@ -145,6 +145,10 @@ function addMask() {
   map.addSource('outside-nyc', { type: 'geojson', data: maskGeo });
   map.addLayer({ id: 'outside-nyc', type: 'fill', source: 'outside-nyc',
     paint: { 'fill-color': PAPER[theme], 'fill-opacity': theme === 'dark' ? 0.62 : 0.66 } });
+  // Borough outlines: there from the first frame, before any data (context while loading).
+  if (map.getLayer('nyc-outline')) map.removeLayer('nyc-outline');
+  map.addLayer({ id: 'nyc-outline', type: 'line', source: 'outside-nyc',
+    paint: { 'line-color': `rgb(${TOKENS.muted[theme].join(',')})`, 'line-width': 0.75, 'line-opacity': 0.5 } });
 }
 
 /** Precinct boundaries (GeoJSON FeatureCollection). Call once. */
@@ -311,6 +315,7 @@ export function setHexagons(rows, label) {
   }
   state.hexes = hexes;
   state.maxN = max;
+  if (!grown) growIn();
   state.label = label;
   // City-wide breaks, once per filter: a hexagon keeps its color when the map is panned.
   state.breaks = niceBreaks(hexes.map((d) => d.n));
@@ -318,6 +323,24 @@ export function setHexagons(rows, label) {
   render();
   state.pointsBox = null;                        // filters changed: points must be reloaded
   maybeLoadPoints();
+}
+
+// The first data grows in once (650 ms): columns rise from the ground. Later filters animate in
+// place (attribute transitions); reduced motion gets the final state at once.
+let grown = false;
+let grow = 1;
+function growIn() {
+  grown = true;
+  if (reduceMotion.matches) return;
+  const start = performance.now();
+  grow = 0;
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / 650);
+    grow = easeOutCubic(t);
+    render();
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 /** Offense group to color the map with ('person', 'property', ...) or null for blue. Takes effect
@@ -522,9 +545,9 @@ function render() {
     coverage: 1,
     extruded: true,
     getElevation: (d) => (d.n / state.maxN) * MAX_HEIGHT_M,
-    elevationScale: (1 - m) ** 1.6 * k,
+    elevationScale: (1 - m) ** 1.6 * k * grow,
     getFillColor: (d) => (d.n > 0 ? [...ramp[classify(d.n, state.breaks)], 235] : [0, 0, 0, 0]),
-    opacity: 0.95 * (1 - m) ** 1.3 * k,
+    opacity: 0.95 * (1 - m) ** 1.3 * k * Math.min(1, grow * 1.6),
     material: { ambient: 0.6, diffuse: 0.5, shininess: 20, specularColor: [30, 30, 30] },
     visible: m < 1 && k > 0,
     pickable: m < 0.5 && k > 0.5,

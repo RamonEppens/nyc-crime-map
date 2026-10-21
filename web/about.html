@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>About the data · NYC Crime Map</title>
+  <meta name="description" content="What the NYC Crime Map counts, how it places and colors complaints, and what it leaves out." />
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <script>
+    try {
+      const t = localStorage.getItem('theme:v3');
+      document.documentElement.dataset.theme = t === 'dark' || t === 'light' ? t
+        : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    } catch { document.documentElement.dataset.theme = 'light'; }
+  </script>
+  <script type="module" src="/src/about.js"></script>
+</head>
+<body>
+  <header class="about-head">
+    <a class="back" href="./"><img src="logo.png" alt="" width="28" height="28" /> <span>NYC Crime Map</span></a>
+  </header>
+  <main class="about">
+    <h1>About the data</h1>
+    <p class="dek">The map shows complaints reported to the New York City Police Department from 2016 to 2025, from the city's open data. This page explains what that means, and what it doesn't.</p>
+
+    <nav aria-label="On this page">
+      <ul>
+        <li><a href="#complaints">Complaints, not crimes</a></li>
+        <li><a href="#dates">Report date, not occurrence date</a></li>
+        <li><a href="#locations">Locations are rounded</a></li>
+        <li><a href="#withheld">Withheld locations</a></li>
+        <li><a href="#rates">Rates and their caveats</a></li>
+        <li><a href="#colors">How colors are set</a></li>
+      </ul>
+    </nav>
+
+    <section id="complaints">
+      <h2>Complaints, not crimes</h2>
+      <p>Each record is a complaint: a report of a felony, misdemeanor or violation that the NYPD took down. It is not an arrest, a charge or a conviction, and some complaints turn out not to be crimes at all. Many crimes are never reported, and reporting rates differ between offenses and between neighborhoods, so the map shows where complaints were made, not where crime happened or how safe a place is.</p>
+      <p>"Enforcement offenses" (drugs, weapons, traffic and impaired driving, public order) mostly record what police officers found while on patrol, not what residents reported. They rise and fall with where and how police work.</p>
+      <p>The map uses 18 offense types of its own, built on the NYPD's offense codes, in four groups. It never shows the age, race or sex of suspects or victims.</p>
+    </section>
+
+    <section id="dates">
+      <h2>Report date, not occurrence date</h2>
+      <p>Complaints are counted by the day they were reported. That date is always present and is how the NYPD publishes the data. The day and time a crime happened is often missing or uncertain (it may be a range, such as "while I was away"), so it is used only in the "Day and hour" chart. A complaint reported in January about something that happened in December counts in January.</p>
+      <p>Data runs from January 2016 through December 2025. The NYPD updates the historic file quarterly; this map is rebuilt from it.</p>
+    </section>
+
+    <section id="locations">
+      <h2>Locations are rounded</h2>
+      <p>To protect privacy, the NYPD moves each complaint to the middle of the block or to the nearest intersection. Many complaints share the same point. When you zoom in, each dot is one of those points, sized by how many complaints it holds and colored by its most frequent offense group; it is never one person's address.</p>
+      <p>Hot spots group complaints into hexagons about 180 meters on a side (roughly eight blocks), so that rounding to a block doesn't matter at that scale.</p>
+    </section>
+
+    <section id="withheld">
+      <h2>Withheld locations</h2>
+      <p>For rape, other sex crimes and sexual exploitation the NYPD does not publish where they happened, to protect victims; it places them at the precinct station house instead. The map counts these complaints in the city, borough and precinct totals but never draws them on hexagons or as points, because a station house is not where they happened. They are marked † in the offense list.</p>
+      <p>A small share of other complaints has no location at all. Those are counted in the totals and the one-sentence summary says how many.</p>
+    </section>
+
+    <section id="rates">
+      <h2>Rates and their caveats</h2>
+      <p>Precincts and boroughs are colored by complaints per 1,000 residents a year, because raw counts mostly measure how big or busy a place is. Residents come from the 2020 Census, summed from census blocks inside each precinct.</p>
+      <ul>
+        <li>Places where few people live but many work, shop or visit (Midtown, for example) come out high per resident. Precincts with fewer than 2,000 residents are hatched and not rated.</li>
+        <li>"Compared with the city" divides a place's rate by the city's; "1.4×" means 40% more complaints per resident than New York City as a whole.</li>
+        <li>"Change since 2019" compares with the same months of 2019, the last year before the pandemic changed both crime and reporting. Small numbers swing a lot, so under 20 complaints the panel shows both counts instead of a percentage.</li>
+        <li>The 116th Precinct was created in December 2024 from parts of the 105th and 113th. For periods before 2025 the three are shown as one area.</li>
+      </ul>
+    </section>
+
+    <section id="colors">
+      <h2>How colors are set</h2>
+      <p>On the light map, darker means more; on the dark map, brighter means more (precinct and borough fills are darker-for-more in both). Each view uses six classes that each hold about a sixth of the areas with complaints anywhere in the city, rounded to friendly numbers (for example 1–8, 9–15, 16–30). The classes are computed for the whole city, so panning or zooming never recolors a place; they change only when you change the dates or offenses. The key always shows the ranges, the unit and the period.</p>
+      <p>The density color is a single plum hue, chosen because it reads as neither water, parks nor alarm. The four offense groups have their own colors, used only for points and the offense list. Highlighter yellow marks the block or neighborhood you are pointing at in a chart.</p>
+    </section>
+
+    <footer class="about-foot">
+      <p>Data through Dec 2025 · NYC Open Data, <a href="https://data.cityofnewyork.us/d/qgea-i56i">NYPD Complaint Data Historic</a>, updated quarterly · Independent project, not affiliated with the City of New York or the NYPD.</p>
+      <p><a href="./">Back to the map</a></p>
+    </footer>
+  </main>
+</body>
+</html>

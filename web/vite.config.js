@@ -9,7 +9,10 @@ const dataDir = fileURLToPath(new URL('../data/web', import.meta.url));
 
 export default defineConfig({
   base: './',
-  build: { target: 'es2022' },
+  build: {
+    target: 'es2022',
+    rollupOptions: { input: { main: fileURLToPath(new URL('index.html', import.meta.url)), about: fileURLToPath(new URL('about.html', import.meta.url)) } },
+  },
   worker: { format: 'es' },
   optimizeDeps: { exclude: ['@duckdb/duckdb-wasm'] },
   plugins: [{
