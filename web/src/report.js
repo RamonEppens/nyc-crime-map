@@ -2,7 +2,7 @@
 // of selection; each module decides by itself whether it applies (and says why not), at what time
 // resolution, and with what color, from three things: the dates picked, the offense types picked
 // and how many complaints there are. The first module, "Over the years", is always shown.
-import { columns, lines, heatmap, smallBars, dumbbells, rankBars } from './charts.js';
+import { columns, lines, heatmap, smallBars, dumbbells, rankBars, timeline } from './charts.js';
 import { fmt, fmtChange } from './format.js';
 
 const FIRST_YEAR = 2016;
@@ -56,54 +56,73 @@ export async function buildReport(ctx) {
   const total = sum(months.map((m) => P[m]));
   const mode = ctx.period.mode;
   const isCity = ctx.kind === 'city';
+  // A single complaint location: comparing one point with the whole city (scaled lines, shares) says
+  // little, so its charts drop NYC and ask point-sized questions instead (decision #76).
+  const isSpot = ctx.kind === 'spot';
+  const noNyc = isCity || isSpot;
   // A single year or month (or one month across years) is a snapshot: the place-lists (busiest
   // blocks, neighborhoods) show a plain ranking. Ranges ask about change: before → now.
   const ranking = mode === 'year' || mode === 'month' || !ctx.prevMonths;             // the city is its own baseline: no "vs NYC" there
   const sections = [];
   const hidden = [];
+  // Comparisons with the baseline: a period longer than a year is compared as its yearly average.
+  const sc = ctx.prevScale ?? 1;
+  const nowLabel = sc === 1 ? ctx.periodLabel : `${ctx.periodLabel}, a year`;
+  const scaled = (v) => Math.round(v * sc);
   const tasks = [];
 
-  // 1. Over the years (always)
+  // 1. Over the years (always). One baseline, 2019 (decision #77): for a place, an index chart,
+  // 2019 = 100 for both the place (columns) and NYC (a grey line), so the line never reads as a
+  // count. The city and a single location show plain counts (nothing to index against).
   {
     const moy = mode === 'month' ? ctx.period.month % 12 : mode === 'crossyear' ? ctx.period.crossMonth : null;
     const perYear = (arr) => YEARS.map((y, i) => (moy == null ? sum(Array.from({ length: 12 }, (_, k) => arr[i * 12 + k])) : arr[i * 12 + moy]));
     const py = perYear(P);
     const ny = perYear(N);
     const avgP = sum(py) / py.length;
-    const avgN = sum(ny) / ny.length || 1;
-    const scaled = ny.map((v) => (v * avgP) / avgN);
     const on = (y) => (mode === 'crossyear' ? true : selYears.includes(y));
     const unit = moy == null ? '' : ` in ${MONTH_NAMES[moy]}`;
+    const iy = (y) => y - FIRST_YEAR;
+    const B = iy(2019);
+    const indexed = !noNyc && py[B] > 0 && ny[B] > 0;
+    const idx = (arr, i) => (100 * arr[i]) / arr[B];
     const first = selYears[0];
     const last = selYears.at(-1);
-    const iy = (y) => y - FIRST_YEAR;
+    // The selected years against 2019 (a range as its yearly average), here and in NYC.
+    const avgOf = (arr) => sum(selYears.map((y) => arr[iy(y)])) / selYears.length;
+    const ref = (arr) => (first > 2019 || (first === last && first !== 2019) ? arr[B] : null);
     let answer;
-    if (mode === 'crossyear' || (first !== last)) {
+    const nowP = avgOf(py), nowN = avgOf(ny);
+    const label = first === last ? `${last}${unit}` : `${first} to ${last}${unit}, a year on average`;
+    const usedAfter2019 = isSpot && py.findIndex((v) => v > 0) > B;    // a point created later: no 2019 comparison
+    if (mode !== 'crossyear' && ref(py) != null && !usedAfter2019) {
+      answer = `${label}: ${fmt(nowP)} complaints, ${change(nowP, py[B])} vs 2019`
+        + (noNyc ? '.' : ` (NYC ${change(nowN, ny[B])}).`);
+    } else {
       const a = mode === 'crossyear' ? FIRST_YEAR : first;
       const b = mode === 'crossyear' ? YEARS.at(-1) : last;
-      answer = isCity ? `${a} to ${b}${unit}: ${change(py[iy(b)], py[iy(a)])}.`
-        : `${a} to ${b}${unit}: ${change(py[iy(b)], py[iy(a)])} here, ${change(ny[iy(b)], ny[iy(a)])} in NYC.`;
-    } else if (last > FIRST_YEAR) {
-      answer = `${last}${unit}: ${fmt(py[iy(last)])} complaints, ${change(py[iy(last)], py[iy(last) - 1])} vs ${last - 1}`
-        + (isCity ? '.' : ` (NYC ${change(ny[iy(last)], ny[iy(last) - 1])}).`);
-    } else {
-      answer = `${last}${unit}: ${fmt(py[iy(last)])} complaints; the data starts in 2016.`;
+      answer = a === b ? `${a}${unit}: ${fmt(py[iy(a)])} complaints.`
+        : `${a} to ${b}${unit}: ${change(py[iy(b)], py[iy(a)])}${noNyc ? '' : ` here, ${change(ny[iy(b)], ny[iy(a)])} in NYC`}.`;
     }
-    answer += ` Since 2016: ${change(py.at(-1), py[0])}${isCity ? '' : ` (NYC ${change(ny.at(-1), ny[0])})`}.`;
+    // A point that only appears in later years: say so (NYPD's placement changes; earlier complaints
+    // on this stretch may sit at a nearby point), instead of an "up from 0" that reads as a surge.
+    const firstUsed = py.findIndex((v) => v > 0);
+    if (isSpot && firstUsed > 0) answer += ` No complaints were placed at this point before ${YEARS[firstUsed]}; earlier ones from this stretch may sit at a nearby point.`;
     sections.push({
       id: 'years',
       title: moy == null ? 'Over the years' : `${MONTH_NAMES[moy]}, year by year`,
       answer,
-      legend: isCity ? [] : [['col', 'This place'], ['cmp', 'NYC, scaled to this place’s average']],
-      note: avgP < 12 ? 'Few complaints per year here, so year-to-year changes are mostly chance.' : '',
+      legend: indexed ? [['col', 'This place'], ['cmp', 'NYC']] : [],
+      note: [indexed ? 'Index: each year’s complaints as a share of 2019 (2019 = 100), here and in NYC, so the two can be compared whatever their size.' : '',
+        avgP < 12 ? 'Few complaints per year here, so year-to-year changes are mostly chance.' : ''].filter(Boolean).join(' '),
       draw: (host) => columns(host, {
-        color: ctx.color,
+        color: ctx.color, colorOff: ctx.colorOff, axisNote: indexed ? '2019 = 100' : '',
         data: YEARS.map((y, i) => ({
-          label: `'${String(y).slice(2)}`, value: py[i], on: on(y),
-          tip: `<strong>${y}${unit}</strong><br>${fmt(py[i])} complaints${isCity ? '' : ' here'}${i ? ` (${change(py[i], py[i - 1])})` : ''}`
-            + (isCity ? '' : `<br>NYC: ${fmt(ny[i])}${i ? ` (${change(ny[i], ny[i - 1])})` : ''}`),
+          label: `'${String(y).slice(2)}`, value: indexed ? idx(py, i) : py[i], on: on(y),
+          tip: `<strong>${y}${unit}</strong><br>${fmt(py[i])} complaints${isCity ? '' : ' here'}${indexed ? ` (index ${Math.round(idx(py, i))})` : ''}`
+            + (indexed ? `<br>NYC: ${fmt(ny[i])} (index ${Math.round(idx(ny, i))})` : ''),
         })),
-        line: isCity ? null : scaled.map((v) => ({ value: v })),
+        line: indexed ? YEARS.map((_, i) => ({ value: idx(ny, i) })) : null,
       }),
     });
   }
@@ -146,7 +165,9 @@ export async function buildReport(ctx) {
   // 3. When in the year: the seasonal shape over two or more whole years, vs NYC's
   {
     const years = mode === 'yearRange' ? selYears : [];
-    if (mode !== 'yearRange' || years.length < 2) {
+    if (isSpot) {
+      hidden.push({ title: 'When in the year', why: 'one location has too few complaints for a seasonal shape; see month by month' });
+    } else if (mode !== 'yearRange' || years.length < 2) {
       hidden.push({ title: 'When in the year', why: 'needs a range of two or more whole years' });
     } else if (total < 120) {
       hidden.push({ title: 'When in the year', why: `only ${fmt(total)} complaints, too few for a seasonal pattern` });
@@ -226,11 +247,11 @@ export async function buildReport(ctx) {
       const label = ctx.categories[c].label;
       return {
         id: 'mix', title: `${label}: share of all complaints`,
-        answer: `${label} was ${sp[0]?.toFixed(1)}% of complaints${isCity ? '' : ' here'} in 2016 and ${sp.at(-1)?.toFixed(1)}% in 2025`
-          + (isCity ? '.' : ` (NYC: ${sn[0]?.toFixed(1)}% → ${sn.at(-1)?.toFixed(1)}%).`),
-        legend: isCity ? [] : [['main', 'This place'], ['cmp', 'NYC']],
+        answer: `${label} was ${sp[0]?.toFixed(1)}% of complaints${noNyc ? '' : ' here'} in 2016 and ${sp.at(-1)?.toFixed(1)}% in 2025`
+          + (noNyc ? '.' : ` (NYC: ${sn[0]?.toFixed(1)}% → ${sn.at(-1)?.toFixed(1)}%).`),
+        legend: noNyc ? [] : [['main', 'This place'], ['cmp', 'NYC']],
         draw: (host) => lines(host, {
-          series: isCity ? [{ values: sp, cls: 'main' }] : [{ values: sn, cls: 'cmp' }, { values: sp, cls: 'main' }],
+          series: noNyc ? [{ values: sp, cls: 'main' }] : [{ values: sn, cls: 'cmp' }, { values: sp, cls: 'main' }],
           labels: YEARS.map((y) => `'${String(y).slice(2)}`), color: ctx.color,
           tips: YEARS.map((y, i) => `<strong>${y}</strong><br>${sp[i]?.toFixed(1) ?? '–'}% here<br>NYC: ${sn[i]?.toFixed(1) ?? '–'}%`),
         }),
@@ -240,9 +261,13 @@ export async function buildReport(ctx) {
       hidden.push({ title: 'What changed', why: 'no earlier period to compare (the data starts in 2016)' });
       return null;
     }
+    if (isSpot && sum(ctx.prevMonths.map((m) => P[m])) === 0) {
+      hidden.push({ title: 'What changed', why: `no complaints were placed at this point ${ctx.prevLabel.replace(/^vs /, 'in ')}` });
+      return null;
+    }
     const rows = [...ctx.cats].map((c) => {
       const a = place.get(c) ?? new Float64Array(120);
-      const now = sum(months.map((m) => a[m]));
+      const now = scaled(sum(months.map((m) => a[m])));
       const before = sum(ctx.prevMonths.map((m) => a[m]));
       return { c, label: ctx.categories[c].label, now, before };
     }).filter((r) => r.now + r.before > 0);
@@ -258,18 +283,91 @@ export async function buildReport(ctx) {
       id: 'mix', title: 'What changed',
       answer: [up && `Biggest rise: ${up.label} (+${fmt(up.now - up.before)})`, down && `biggest drop: ${down.label} (−${fmt(down.before - down.now)})`]
         .filter(Boolean).join('; ') + `, ${ctx.prevLabel.replace(/^vs /, 'compared with ')}.`,
-      note: 'The eight most common offense types here, ordered by how much they changed.',
+      note: `The eight most common offense types here, ordered by the change in number of complaints${sc === 1 ? '' : ' (this period as a yearly average)'}.`,
       draw: (host) => dumbbells(host, {
-        color: ctx.color, beforeLabel: ctx.prevLabel.replace(/^vs /, ''), nowLabel: ctx.periodLabel,
-        rows: top.map((r) => ({ ...r, tip: pairTip(r.label, ctx.prevLabel.replace(/^vs /, ''), r.before, ctx.periodLabel, r.now) })),
+        color: ctx.color, beforeLabel: ctx.prevLabel.replace(/^vs /, ''), nowLabel,
+        rows: top.map((r) => ({ ...r, tip: pairTip(r.label, ctx.prevLabel.replace(/^vs /, ''), r.before, nowLabel, r.now) })),
       }),
     };
   })());
 
+  // Single location with few complaints: the complaints themselves (decision #79). With so few, a
+  // pattern chart would say nothing, but when and what each one was does: the same night, or spread
+  // over the year?
+  if (isSpot && ctx.spot && total > 0 && total <= 50) {
+    tasks.push((async () => {
+      const rows = await ctx.spot.each(months, ctx.cats);
+      if (!rows.length) return null;
+      const dayOf = (m) => Math.round((Date.UTC(2016 + Math.floor(m / 12), m % 12, 1) - Date.UTC(2016, 0, 1)) / 864e5);
+      const span = [dayOf(months[0]), dayOf(months.at(-1) + 1) - 1];
+      const date = (d, opts) => new Date(Date.UTC(2016, 0, 1 + d)).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
+      const full = (d) => date(d, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+      const when = (r) => (r.hour >= 0 && r.dow >= 0 ? `happened a ${DAYS[r.dow]} around ${hourLabel(r.hour)}` : 'time not recorded');
+      const name = (r) => `${ctx.categories[r.cat]?.label ?? 'Other'}${r.att ? ' (attempted)' : ''}`;
+      // Ticks: months for a year or less, years for longer periods.
+      const ticks = [];
+      if (months.length <= 13) for (const m of months) ticks.push({ d: dayOf(m), label: MONTHS[m % 12][0] });
+      else for (const m of months) if (m % 12 === 0) ticks.push({ d: dayOf(m), label: `'${String(yearOf(m)).slice(2)}` });
+      const sameDay = new Set(rows.map((r) => r.d)).size;
+      const spread = sameDay === 1 ? `All ${rows.length} were reported on the same day, ${full(rows[0].d)}.`
+        : `${rows.length} complaints on ${sameDay} different days, from ${full(rows[0].d)} to ${full(rows.at(-1).d)}.`;
+      return {
+        id: 'each', title: 'Each complaint',
+        answer: spread,
+        note: 'By report date; the day and hour are when it happened, as reported (unknown times are often recorded as midnight or noon). Locations are rounded by the NYPD, so complaints here may come from anywhere along this stretch of street or corner.',
+        draw: (host) => {
+          timeline(host, { days: span, ticks, items: rows.map((r) => ({ d: r.d, color: ctx.groupColor(r.cat),
+            tip: `<strong>${name(r)}</strong><br>Reported ${full(r.d)}<br><span class="tip-muted">${when(r)}</span>` })) });
+          host.querySelector(':scope > .each-list')?.remove();     // redraws (resize) replace the list
+          const list = document.createElement('ol');
+          list.className = 'each-list';
+          list.innerHTML = rows.map((r) => `<li><i style="background:${ctx.groupColor(r.cat)}" aria-hidden="true"></i>
+            <span class="each-what">${name(r)}</span><span class="each-when">Reported ${full(r.d)} · ${when(r)}${r.prem ? ` · ${r.prem}` : ''}</span></li>`).join('');
+          host.append(list);
+        },
+      };
+    })());
+  }
+
+  // Single location: what kind of place it is, and whether its complaints arrive in batches.
+  if (isSpot && ctx.spot) {
+    tasks.push((async () => {
+      const rows = await ctx.spot.premises(months, ctx.cats);
+      const n = sum(rows.map((r) => r.n));
+      if (n < 10) { hidden.push({ title: 'What kind of place', why: `only ${fmt(n)} complaints` }); return null; }
+      const top = rows.slice(0, 6);
+      const share = (v) => `${Math.round((100 * v) / n)}%`;
+      return {
+        id: 'premise', title: 'What kind of place',
+        answer: `Reported as ${top[0].label.toLowerCase()} (${share(top[0].n)})${top[1] ? `, then ${top[1].label.toLowerCase()} (${share(top[1].n)})` : ''}.`,
+        note: 'The premise type the officer recorded for each complaint. A store, a station or an office here often means complaints filed by the business, not on the street.',
+        draw: (host) => rankBars(host, { color: ctx.color, rows: top.map((r) => ({ name: r.label, detail: share(r.n), value: r.n,
+          tip: `<strong>${r.label}</strong><br>${fmt(r.n)} complaints, ${share(r.n)}` })) }),
+      };
+    })());
+    tasks.push((async () => {
+      const days = await ctx.spot.days(months, ctx.cats);
+      const n = total;                                 // every complaint at this point in the period
+      if (n < 20) { hidden.push({ title: 'Busiest days', why: `only ${fmt(n)} complaints` }); return null; }
+      const top = days.slice(0, 5);
+      const fmtDay = (d) => new Date(Date.UTC(2016, 0, 1 + d)).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+      const topShare = (100 * sum(top.map((r) => r.n))) / n;
+      const batch = top[0].n >= 5 && (100 * top[0].n) / n >= 5;
+      return {
+        id: 'days', title: 'Busiest days',
+        answer: `${fmtDay(top[0].d)}: ${fmt(top[0].n)} complaints (${Math.round((100 * top[0].n) / n)}% of this period). The five busiest days hold ${Math.round(topShare)}%.`
+          + (batch ? ' Many complaints on one day usually means a batch filed together, not a spike in incidents.' : ' Complaints are spread out over time.'),
+        note: 'By report date; shares are of all complaints at this point in the period.',
+        draw: (host) => rankBars(host, { color: ctx.color, rows: top.map((r) => ({ name: fmtDay(r.d), value: r.n,
+          tip: `<strong>${fmtDay(r.d)}</strong><br>${fmt(r.n)} complaints` })) }),
+      };
+    })());
+  }
+
   // 6. Where exactly
   tasks.push((async () => {
     if (!ctx.blocks) {
-      hidden.push({ title: 'Where exactly', why: ctx.kind === 'point' ? 'the map shows each complaint location around this point' : 'pick a borough, neighborhood, precinct or street' });
+      hidden.push({ title: 'Where exactly', why: ctx.kind === 'spot' ? 'this is a single location' : ctx.kind === 'point' ? 'the map shows each complaint location around this point' : 'pick a borough, neighborhood, precinct or street' });
       return null;
     }
     const [now] = await Promise.all([ctx.blocks(months, ctx.cats)]);
@@ -315,81 +413,88 @@ export async function buildReport(ctx) {
       };
     }
     const rows = now.slice(0, 8).map((b) => ({
-      label: b.label, now: b.n, before: prev.get(b.key) ?? 0, ...nav(b),
-      tip: pairTip(b.label, ctx.prevLabel?.replace(/^vs /, '') ?? 'Before', prev.get(b.key) ?? 0, ctx.periodLabel, b.n),
+      label: b.label, now: scaled(b.n), before: prev.get(b.key) ?? 0, ...nav(b),
+      tip: pairTip(b.label, ctx.prevLabel?.replace(/^vs /, '') ?? 'Before', prev.get(b.key) ?? 0, nowLabel, scaled(b.n)),
     }));
     return {
       id: 'where', title: 'Busiest blocks',
       answer: `Top block: ${rows[0].label} (${fmt(rows[0].now)}).`,
       note: 'Hundred-blocks of house numbers, both sides together; an intersection counts for each street that meets there.',
       draw: (host) => dumbbells(host, {
-        color: ctx.color, beforeLabel: ctx.prevLabel?.replace(/^vs /, '') ?? 'before', nowLabel: ctx.periodLabel, rows,
+        color: ctx.color, beforeLabel: ctx.prevLabel?.replace(/^vs /, '') ?? 'before', nowLabel, rows,
       }),
     };
   })());
 
-  // 7. Neighborhoods (boroughs only): every neighborhood of the borough; a ranking for a snapshot,
-  // before → now for a range.
+  // 7. Neighborhoods (boroughs only), by complaints per 1,000 residents a year (counts mostly measure
+  // size); neighborhoods with fewer than 2,000 residents (parks, airports) are listed apart, unrated.
   tasks.push((async () => {
     if (!ctx.areas) return null;
     const [now, before] = await Promise.all([ctx.areas(months, ctx.cats), ctx.prevMonths ? ctx.areas(ctx.prevMonths, ctx.cats) : []]);
     const prev = new Map(before.map((a) => [a.key, a.n]));
-    const all = now.map((a) => ({ ...a, now: a.n, before: prev.get(a.key) ?? 0 }))
-      .filter((a) => a.now + a.before > 0).sort((a, b) => b.now - a.now);
-    if (!all.length) {
+    const yrsNow = months.length / 12;
+    const yrsBefore = (ctx.prevMonths?.length ?? 12) / 12;
+    const rate = (n, pop, yrs) => (1000 * n) / pop / yrs;
+    const rows = now.map((a) => ({ ...a, before: prev.get(a.key) ?? 0 })).filter((a) => a.n + a.before > 0);
+    const rated = rows.filter((a) => a.pop >= 2000)
+      .map((a) => ({ ...a, now: rate(a.n, a.pop, yrsNow), was: rate(a.before, a.pop, yrsBefore) }))
+      .sort((a, b) => b.now - a.now);
+    const unrated = rows.filter((a) => !(a.pop >= 2000));
+    if (!rated.length) {
       hidden.push({ title: 'Neighborhoods', why: 'no mapped complaints in this selection' });
       return null;
     }
     const prevL = ctx.prevLabel?.replace(/^vs /, '') ?? '';
+    const r1 = (v) => (v >= 100 ? fmt(v) : v.toFixed(1));
     const nav = (a) => ({ onEnter: () => ctx.highlightArea?.(a.key), onLeave: ctx.clearHighlight, onClick: () => ctx.selectArea?.(a.key) });
-    // "Show all" under the first rows; the chart is redrawn in place.
     const withMore = (first, drawRows) => function draw(host) {
       const showAll = host.dataset.all === '1';
       host.querySelector(':scope > .chart-more')?.remove();
-      drawRows(host, showAll ? all : all.slice(0, first));
-      if (all.length > first) {
+      drawRows(host, showAll ? rated : rated.slice(0, first));
+      if (rated.length > first) {
         const btn = document.createElement('button');
         btn.className = 'chart-more';
-        btn.textContent = showAll ? 'Show fewer' : `Show all ${all.length} neighborhoods`;
+        btn.textContent = showAll ? 'Show fewer' : `Show all ${rated.length} neighborhoods`;
         btn.onclick = () => { host.dataset.all = showAll ? '' : '1'; draw(host); };
         host.append(btn);
       }
     };
-    if (ranking) {
+    const unratedNote = unrated.length ? ` Not rated (fewer than 2,000 residents): ${unrated.map((a) => a.label).join(', ')}.` : '';
+    if (ranking || !ctx.prevMonths) {
       return {
         id: 'areas', title: 'Neighborhoods',
-        answer: `Most complaints: ${all[0].label} (${fmt(all[0].now)}), then ${all.slice(1, 3).map((a) => `${a.label} (${fmt(a.now)})`).join(' and ')}.`,
-        note: "Mapped complaints inside each neighborhood in this period. Counts grow with size and population; per-resident figures are in each neighborhood's panel. Hover to see one on the map; click to open it.",
-        draw: withMore(10, (host, rows) => rankBars(host, {
+        answer: `Highest rate: ${rated[0].label} (${r1(rated[0].now)} per 1,000 residents a year), then ${rated.slice(1, 3).map((a) => `${a.label} (${r1(a.now)})`).join(' and ')}.`,
+        note: `Mapped complaints per 1,000 residents a year (2020 Census), with the count beside each name. Places where few people live but many visit come out high. Hover to see one on the map; click to open it.${unratedNote}`,
+        draw: withMore(10, (host, list) => rankBars(host, {
           color: ctx.color,
-          rows: rows.map((a) => ({
-            name: a.label, value: a.now, ...nav(a),
-            tip: `<strong>${a.label}</strong>: ${fmt(a.now)} complaints${ctx.prevMonths ? ` <span class="tip-muted">(${prevL}: ${fmt(a.before)})</span>` : ''}`,
+          rows: list.map((a) => ({
+            name: a.label, detail: `${fmt(a.n)} complaints`, value: a.now, valueLabel: r1(a.now), ...nav(a),
+            tip: `<strong>${a.label}</strong><br>${r1(a.now)} per 1,000 residents a year<br>${fmt(a.n)} complaints${ctx.prevMonths ? ` <span class="tip-muted">(${prevL}: ${fmt(a.before)})</span>` : ''}`,
           })),
         })),
       };
     }
-    // Rise and drop in percent, among residential neighborhoods big enough for a percentage to mean something.
-    const big = all.filter((a) => a.residential !== false && a.now >= 100 && a.before >= 100);
-    const up = big.reduce((a, r) => (!a || r.now / r.before > a.now / a.before ? r : a), null);
-    const down = big.reduce((a, r) => (!a || r.now / r.before < a.now / a.before ? r : a), null);
+    const big = rated.filter((a) => a.n >= 100 && a.before >= 100);
+    const up = big.reduce((a, r) => (!a || r.now / r.was > a.now / a.was ? r : a), null);
+    const down = big.reduce((a, r) => (!a || r.now / r.was < a.now / a.was ? r : a), null);
     return {
       id: 'areas', title: 'Neighborhoods',
-      answer: (up?.now > up?.before || down?.now < down?.before)
-        ? [up?.now > up?.before && `Biggest rise: ${up.label} (${fmtChange(pct(up.now, up.before))})`,
-          down?.now < down?.before && `biggest drop: ${down.label} (${fmtChange(pct(down.now, down.before))})`]
+      answer: (up?.now > up?.was || down?.now < down?.was)
+        ? [up?.now > up?.was && `Biggest rise: ${up.label} (${fmtChange(pct(up.now, up.was))})`,
+          down?.now < down?.was && `biggest drop: ${down.label} (${fmtChange(pct(down.now, down.was))})`]
           .filter(Boolean).join('; ').replace(/^b/, 'B') + `, ${ctx.prevLabel.replace(/^vs /, 'compared with ')}.`
-        : `Most complaints: ${all[0].label} (${fmt(all[0].now)}).`,
-      note: "Mapped complaints inside each neighborhood, busiest first; counts grow with size and population (per-resident figures are in each neighborhood's panel). Rise and drop among residential neighborhoods (not parks or airports) with at least 100 complaints in both periods. Click a row to open it.",
-      draw: withMore(12, (host, rows) => dumbbells(host, {
+        : `Highest rate: ${rated[0].label} (${r1(rated[0].now)} per 1,000 residents a year).`,
+      note: `Complaints per 1,000 residents a year, highest first, ${prevL} → now. Rise and drop among neighborhoods with at least 100 complaints in both periods. Click a row to open it.${unratedNote}`,
+      draw: withMore(12, (host, list) => dumbbells(host, {
         color: ctx.color, beforeLabel: prevL, nowLabel: ctx.periodLabel,
-        rows: rows.map((a) => ({ ...a, ...nav(a), tip: pairTip(a.label, prevL, a.before, ctx.periodLabel, a.now) })),
+        rows: list.map((a) => ({ label: a.label, before: Math.round(a.was), now: Math.round(a.now), ...nav(a),
+          tip: `<strong>${a.label}</strong><br>${prevL}: ${r1(a.was)} → ${ctx.periodLabel}: ${r1(a.now)} per 1,000 a year<br><span class="tip-muted">${fmt(a.before)} → ${fmt(a.n)} complaints</span>` })),
       })),
     };
   })());
 
   for (const s of await Promise.all(tasks)) if (s) sections.push(s);
-  const order = ['years', 'months', 'season', 'time', 'mix', 'areas', 'where'];
+  const order = ['each', 'years', 'months', 'season', 'time', 'premise', 'days', 'mix', 'areas', 'where'];
   sections.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
   return { sections, hidden };
 }

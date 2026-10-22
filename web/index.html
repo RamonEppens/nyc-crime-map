@@ -55,7 +55,7 @@
           <div class="search" role="search">
             <label class="visually-hidden" for="search">Search an address, street, neighborhood or precinct</label>
             <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
-            <input id="search" type="search" placeholder="Search an address, street, neighborhood or precinct" autocomplete="off" spellcheck="false"
+            <input id="search" type="search" placeholder="Address, street or place" autocomplete="off" spellcheck="false"
               role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="search-results" aria-keyshortcuts="/" />
             <kbd class="search-key" aria-hidden="true">/</kbd>
             <button class="search-clear" type="button" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
@@ -86,13 +86,13 @@
             <p class="hint withheld">† Location withheld by NYPD: counted, not drawn.</p>
           </section>
 
+          <button type="button" class="chip theme-phone phone-theme">Use dark map</button>
           <footer class="sheet-foot">
             <a class="link" href="about.html">About this data</a>
             <p class="freshness">Data through Dec 2025 · NYC Open Data, NYPD Complaint Data Historic, updated quarterly · Independent project, not affiliated with the City of New York or the NYPD.</p>
           </footer>
         </div>
         <div class="phone-foot">
-          <button type="button" class="chip theme-phone">Use dark map</button>
           <button type="button" class="show-results">Show results</button>
         </div>
       </nav>
@@ -125,7 +125,7 @@
           <button type="button" role="radio" data-area="precinct">Precincts</button>
           <button type="button" role="radio" data-area="borough">Boroughs</button>
         </div>
-        <button type="button" class="tilt-toggle chrome-btn" aria-pressed="true" title="Tilt the map to show columns">Tilt</button>
+        <button type="button" class="tilt-toggle chrome-btn" aria-pressed="true" title="Tilt the map to show columns"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l6-9h12l-6 9z"/></svg>Tilt</button>
       </div>
 
       <section class="legend map-box" data-block="legend" aria-labelledby="legend-title">
@@ -165,6 +165,7 @@
           <div class="details-view">
             <div class="detail-section">
               <h3 class="section-title">By offense</h3>
+              <div class="group-split"></div>
               <div class="bars"></div>
               <button class="more" type="button" hidden></button>
             </div>

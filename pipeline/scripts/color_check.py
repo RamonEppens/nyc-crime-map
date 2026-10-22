@@ -101,7 +101,7 @@ def ucs(h, cvd=None):
     return cspace_convert(c, "sRGB1", "CAM02-UCS")
 
 
-print("### Data ramp (hexagons: theme ramp; precincts and boroughs: light ramp in both themes)\n")
+print("### Data ramp (the theme ramp for hexagons, precincts and boroughs)\n")
 print("| Class | Light | vs paper | Dark | vs night |")
 print("|---|---|---|---|---|")
 for i, (l, d) in enumerate(zip(RAMP["light"], RAMP["dark"])):

@@ -16,7 +16,7 @@ a:hover { text-decoration-color: var(--ink); }
 .back { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font: 600 var(--fs-20)/1.15 var(--serif); text-decoration: none; }
 .about { max-width: 680px; margin: 0 auto; padding: 32px 16px 48px; }
 h1 { margin: 0; font: 600 var(--fs-28)/1.15 var(--serif); }
-h2 { margin: 36px 0 8px; font: 650 var(--fs-20)/1.15 var(--sans); }
+h2 { margin: 36px 0 8px; font: 600 var(--fs-20)/1.15 var(--serif); }
 .dek { margin: 12px 0 0; font-family: var(--serif); }
 p, li { margin: 10px 0 0; max-width: 66ch; }
 nav ul { margin: 20px 0 0; padding: 14px 0 0 20px; border-top: 1px solid var(--rule); font-size: var(--fs-14); }

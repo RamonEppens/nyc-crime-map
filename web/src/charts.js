@@ -17,7 +17,8 @@ export function niceTicks(max, count = 4) {
   if (!(max > 0)) return { max: 1, ticks: [0, 1] };
   const raw = max / count;
   const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((f) => f * mag).find((s) => s >= raw);
+  // 2.5 only from 25 up: 2.5 and 7.5 would be rounded on the axis
+  const step = (mag >= 10 ? [1, 2, 2.5, 5, 10] : [1, 2, 5, 10]).map((f) => f * mag).find((s) => s >= raw);
   const top = Math.ceil(max / step) * step;
   const ticks = [];
   for (let v = 0; v <= top + step / 2; v += step) ticks.push(+v.toFixed(10));
@@ -107,7 +108,7 @@ function yAxis(svg, { left, right, top, bottom, width, height, ticks, max, forma
  * drawn on the SAME axis (e.g. NYC indexed to this place's average).
  * data: [{label, value, on, tip}], line: [{value}] | null
  */
-export function columns(host, { data, line = null, lineLabel = '', color, height = 170, every = 1 }) {
+export function columns(host, { data, line = null, lineLabel = '', color, colorOff = null, height = 170, every = 1, axisNote = '' }) {
   const { svg, width, tip } = frame(host, height);
   const m = { left: 40, right: 8, top: 10, bottom: 22 };
   const top = Math.max(...data.map((d) => d.value), ...(line ?? []).map((d) => d.value ?? 0));
@@ -118,7 +119,8 @@ export function columns(host, { data, line = null, lineLabel = '', color, height
   const y = (v) => m.top + (height - m.top - m.bottom) * (1 - v / max);
   data.forEach((d, i) => {
     const x = m.left + band * i + (band - bw) / 2;
-    const p = el('path', { d: columnPath(x, y(d.value), bw, y(0) - y(d.value)), fill: color, class: d.on ? 'col on' : 'col off' });
+    // Unselected columns in a lighter step of the same ramp (not transparency), so they keep 3:1.
+    const p = el('path', { d: columnPath(x, y(d.value), bw, y(0) - y(d.value)), fill: d.on || !colorOff ? color : colorOff, class: d.on ? 'col on' : colorOff ? 'col dim' : 'col off' });
     svg.append(p);
     if (i % every === 0 || i === data.length - 1) {
       svg.append(el('text', { x: x + bw / 2, y: height - 6, 'text-anchor': 'middle', class: d.on ? 'tick strong' : 'tick' }, d.label));
@@ -127,6 +129,7 @@ export function columns(host, { data, line = null, lineLabel = '', color, height
     hover(hit, d, tip, p);
     svg.append(hit);
   });
+  if (axisNote) svg.append(el('text', { x: m.left, y: 8, class: 'tick' }, axisNote));
   if (line) {
     const pts = line.map((d, i) => (d.value == null ? null : [m.left + band * i + band / 2, y(d.value)]));
     const dAttr = pts.filter(Boolean).map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
@@ -160,8 +163,16 @@ export function lines(host, { series, labels, tips, color, height = 170, tickEve
     });
     svg.append(el('path', { d, class: `ln ${s.cls}`, stroke: s.cls === 'cmp' ? null : color }));
   }
-  labels.forEach((l, i) => {
-    if (l && (i % tickEvery === 0)) svg.append(el('text', { x: x(i), y: height - 6, 'text-anchor': 'middle', class: 'tick' }, l));
+  // Labels never touch: keep every k-th one so neighbours are at least a label apart (2016, 2018…)
+  const shown = labels.map((l, i) => (l && i % tickEvery === 0 ? i : -1)).filter((i) => i >= 0);
+  const widest = Math.max(0, ...shown.map((i) => String(labels[i]).length)) * 7.2 + 10;
+  const gap = shown.length > 1 ? x(shown[1]) - x(shown[0]) : Infinity;
+  const every = Math.max(1, Math.ceil(widest / gap));
+  shown.forEach((i, j) => {
+    if (j % every) return;
+    const cx = x(i);
+    const anchor = cx - widest / 2 < 0 ? 'start' : cx + widest / 2 > width ? 'end' : 'middle';
+    svg.append(el('text', { x: cx, y: height - 6, 'text-anchor': anchor, class: 'tick' }, labels[i]));
   });
   // crosshair + tooltip
   const cross = el('line', { y1: m.top, y2: height - m.bottom, class: 'cross', visibility: 'hidden' });
@@ -240,7 +251,7 @@ export function dumbbells(host, { rows, color, beforeLabel, nowLabel }) {
   const height = rows.length * rowH + 26;
   const { svg, width, tip } = frame(host, height);
   const narrow = width < 420;
-  const m = { left: narrow ? 120 : 170, right: 64, top: 18, bottom: 8 };
+  const m = { left: narrow ? 140 : 180, right: 52, top: 18, bottom: 8 };
   const max = Math.max(1, ...rows.flatMap((r) => [r.before, r.now]));
   const { max: top } = niceTicks(max, 3);
   const x = (v) => m.left + (width - m.left - m.right) * (v / top);
@@ -248,9 +259,16 @@ export function dumbbells(host, { rows, color, beforeLabel, nowLabel }) {
   rows.forEach((r, i) => {
     const y = m.top + rowH * i + rowH / 2;
     svg.append(el('line', { x1: m.left, x2: width - m.right, y1: y, y2: y, class: 'grid' }));
-    const label = r.label.length > (narrow ? 17 : 26) ? `${r.label.slice(0, narrow ? 16 : 25)}…` : r.label;
+    const label = r.label.length > (narrow ? 21 : 27) ? `${r.label.slice(0, narrow ? 20 : 26)}…` : r.label;
     svg.append(el('text', { x: m.left - 8, y: y + 4, 'text-anchor': 'end', class: 'row-label' }, label));
-    svg.append(el('line', { x1: x(r.before), x2: x(r.now), y1: y, y2: y, stroke: color, class: 'db-line' }));
+    // Earlier -> later with an arrowhead, so the direction reads even where the dots overlap.
+    const dir = Math.sign(r.now - r.before);
+    const x1 = x(r.before), x2 = x(r.now);
+    svg.append(el('line', { x1, x2, y1: y, y2: y, stroke: color, class: 'db-line' }));
+    if (dir && Math.abs(x2 - x1) > 12) {
+      const tip0 = x2 - dir * 5.5;
+      svg.append(el('path', { d: `M${tip0 - dir * 5},${y - 3.5}L${tip0},${y}L${tip0 - dir * 5},${y + 3.5}`, stroke: color, fill: 'none', class: 'db-arrow' }));
+    }
     svg.append(el('circle', { cx: x(r.before), cy: y, r: 4.5, class: 'db-before' }));
     svg.append(el('circle', { cx: x(r.now), cy: y, r: 4.5, fill: color, class: 'db-now' }));
     const ch = r.before ? ((r.now - r.before) / r.before) * 100 : null;
@@ -283,7 +301,7 @@ export function rankBars(host, { rows, color }) {
     svg.append(label);
     const bw = Math.max(2, x(r.value));
     svg.append(el('path', { d: barPath(m.left, y0 + 22, bw, 11), fill: color, class: 'rank-bar' }));
-    svg.append(el('text', { x: m.left + bw + 6, y: y0 + 31.5, class: 'bar-value' }, fmt(r.value)));
+    svg.append(el('text', { x: m.left + bw + 6, y: y0 + 31, class: 'bar-value' }, r.valueLabel ?? fmt(r.value)));
     const hit = el('rect', { x: 0, y: y0, width, height: rowH, class: r.onClick ? 'hit clickable' : 'hit' });
     hover(hit, r, tip, hit);
     if (r.onClick) hit.addEventListener('click', r.onClick);
@@ -296,4 +314,31 @@ export function rankBars(host, { rows, color }) {
 function barPath(x, y, w, h) {
   const r = Math.min(4, h / 2, w);
   return `M${x},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h - r}Q${x + w},${y + h} ${x + w - r},${y + h}H${x}Z`;
+}
+
+/** One mark per complaint along the period (by report day), stacked when several share a day.
+ *  items: [{d, color, tip}], days: [first, last] (day indices since 2016-01-01). */
+export function timeline(host, { items, days, ticks = [] }) {
+  const byDay = new Map();
+  for (const it of items) { const k = it.d; byDay.set(k, (byDay.get(k) ?? 0) + 1); it.k = byDay.get(k) - 1; }
+  const maxStack = Math.max(1, ...byDay.values());
+  const r = 4.5, gap = 2;
+  const height = 34 + maxStack * (2 * r + gap);
+  const { svg, width, tip } = frame(host, height);
+  const m = { left: 8, right: 8, bottom: 22 };
+  const x = (d) => m.left + ((width - m.left - m.right) * (d - days[0])) / Math.max(1, days[1] - days[0]);
+  const base = height - m.bottom;
+  svg.append(el('line', { x1: m.left, x2: width - m.right, y1: base, y2: base, class: 'baseline' }));
+  for (const t of ticks) {
+    svg.append(el('line', { x1: x(t.d), x2: x(t.d), y1: base, y2: base + 4, class: 'baseline' }));
+    svg.append(el('text', { x: x(t.d), y: height - 6, 'text-anchor': 'middle', class: 'tick' }, t.label));
+  }
+  for (const it of items) {
+    const c = el('circle', { cx: x(it.d), cy: base - r - 2 - it.k * (2 * r + gap), r, fill: it.color, class: 'tl-dot' });
+    svg.append(c);
+    const hit = el('circle', { cx: x(it.d), cy: base - r - 2 - it.k * (2 * r + gap), r: r + 5, class: 'hit' });
+    hover(hit, it, tip, c);
+    svg.append(hit);
+  }
+  return svg;
 }

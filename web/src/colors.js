@@ -6,12 +6,21 @@
 //   light map: pale (few complaints) -> deep (many); dark map: dark (few) -> pale (many)
 export const RAMPS = {
   light: ['#f3ddf0', '#dcb1d7', '#c287bc', '#a15e9c', '#7c3b77', '#532150'],
-  dark: ['#512f4f', '#7a4475', '#a15e9c', '#c57fbf', '#e3a6dd', '#facef4'],
+  // dark: OKLCH L 0.42 -> 0.82, chroma 0.10 (decision #77): the lowest class reaches 2.1:1 on night
+  // and the top stops short of white, so the core doesn't glow.
+  dark: ['#6b3767', '#834d7e', '#9c6496', '#b57baf', '#cf94c9', '#e9ade3'],
 };
 
-// Precinct and borough fills: the light ramp in both themes (filled areas cover the basemap, so
-// "darker = more" stays readable at night too).
-export const PRECINCT_RAMPS = { light: RAMPS.light, dark: RAMPS.light };
+// Precinct and borough fills use the theme's ramp, like the hexagons, so one theme reads one way:
+// darker = more by day, brighter = more at night (decision #75; supersedes "light ramp in both").
+export const PRECINCT_RAMPS = RAMPS;
+/** Ink or paper, whichever reads on a fill (labels written on precincts and boroughs). */
+export const textOn = (hex) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // whichever has the higher contrast: ink #10171f (L 0.0087) or paper #f4f5f2 (L 0.91)
+  return (L + 0.05) / 0.0587 >= 0.96 / (L + 0.05) ? 'ink' : 'paper';
+};
 
 // Offense groups: points and the offense list only (never the density layers). Checked for
 // >= 3:1 on both basemaps where possible and >= 11 CAM02-UCS under deutan, protan and tritan.
@@ -44,8 +53,15 @@ export function quantileBreaks(values, k = 6) {
 
 /** Quantile breaks rounded to friendly numbers (…, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, …), strictly
  *  increasing, so the key reads "11–20" instead of "13–21" while the classes stay roughly equal. */
-export function niceBreaks(values, k = 6) {
-  const raw = quantileBreaks(values.filter((v) => v > 0), k);
+/** Hexagon classes (decision #77): the 20th, 40th, 60th, 80th and 95th percentiles of the areas
+ *  with complaints, so the top class is the top 5% and the dense core separates instead of
+ *  filling one shade. Pass `probs` for other splits (precincts use equal sixths). */
+export const HEX_PROBS = [0.2, 0.4, 0.6, 0.8, 0.95];
+export function niceBreaks(values, k = 6, probs = null) {
+  const pos = values.filter((v) => v > 0).sort((a, b) => a - b);
+  const raw = probs
+    ? probs.map((p) => pos[Math.min(pos.length - 1, Math.floor(p * pos.length))] ?? 0)
+    : quantileBreaks(pos, k);
   const STEPS = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8];
   const nice = (x) => {
     if (!(x > 0)) return 1;

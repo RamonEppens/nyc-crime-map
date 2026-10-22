@@ -99,7 +99,7 @@ function renderPeriod() {
     customOpen = false;
     const x = PRESETS.find((p) => p.id === id);
     setSpan(...x.span);
-    chips.querySelector(`[data-preset="${id}"]`)?.focus();
+    if (e.detail === 0) chips.querySelector(`[data-preset="${id}"]`)?.focus();   // keyboard: keep focus on the new chip
   };
   // Radio group keys: arrows move between chips (and choose), like native radios.
   chips.onkeydown = (e) => {
@@ -158,14 +158,27 @@ function setupStrip() {
     return Math.max(0, Math.min(N_MONTHS - 1, Math.floor(((x - r.left) / r.width) * N_MONTHS)));
   };
   let anchor = null;
+  // Pressing on the chosen span (or within 2 months of an edge) grabs its nearer edge and stretches
+  // it; the other edge stays put. Pressing elsewhere starts a new span (decision #80).
+  const grab = (m) => {
+    const [a, b] = spanOf(state.period);
+    if (m < a - 2 || m > b + 2) return null;
+    return Math.abs(m - a) <= Math.abs(m - b) ? b : a;        // the anchor is the far edge
+  };
+  el.addEventListener('pointermove', (e) => {
+    if (anchor !== null) return;
+    el.style.cursor = grab(monthAt(e.clientX)) !== null ? 'ew-resize' : 'crosshair';
+  });
   el.addEventListener('pointerdown', (e) => {
-    anchor = monthAt(e.clientX);
+    const m = monthAt(e.clientX);
+    const fixed = grab(m);
+    anchor = fixed ?? m;
     el.setPointerCapture(e.pointerId);
     customOpen = false;
-    stripSpan = [anchor, anchor];
+    stripSpan = fixed !== null ? [Math.min(fixed, m), Math.max(fixed, m)] : [m, m];
+    if (fixed !== null) { const [a, b] = spanOf(state.period); stripSpan = [a, b]; }   // a click without dragging changes nothing
     renderPeriod();
-    e.preventDefault();
-    el.focus({ preventScroll: true });
+    e.preventDefault();                               // no text selection; no focus ring for a mouse press
   });
   el.addEventListener('pointermove', (e) => {
     if (anchor === null) return;
@@ -177,6 +190,8 @@ function setupStrip() {
     if (anchor === null) return;
     anchor = null;
     const [a, b] = stripSpan ?? spanOf(state.period);
+    const [a0, b0] = spanOf(state.period);
+    if (a === a0 && b === b0) { stripSpan = null; renderPeriod(); return; }   // a plain click on the span: nothing to change
     setSpan(a, b);
   };
   el.addEventListener('pointerup', end);
@@ -204,7 +219,11 @@ let keyTimer = 0;
 /** Complaints per month for the selected offenses, for the strip (cached per offense set). */
 const monthlyCache = new Map();
 async function loadMonthly() {
-  const key = catList(state.cats);
+  // With nothing selected the strip keeps the shape of all complaints, greyed, so the data
+  // visibly still exists.
+  const greyed = !state.cats.size;
+  $('#strip').classList.toggle('greyed', greyed);
+  const key = greyed ? catList(meta.categories.map((c) => c.code)) : catList(state.cats);
   if (!monthlyCache.has(key)) {
     monthlyCache.set(key, query(`SELECT m, sum(n)::INTEGER AS n FROM agg_precinct WHERE cat IN (${key}) GROUP BY 1`).then((rows) => {
       const out = new Array(N_MONTHS).fill(0);
@@ -213,12 +232,15 @@ async function loadMonthly() {
     }));
   }
   const values = await monthlyCache.get(key);
-  if (key !== catList(state.cats)) return;
+  if (greyed !== !state.cats.size || (!greyed && key !== catList(state.cats))) return;
   monthly = values;
   renderPeriod();
 }
 
 // ---------- offenses: four group rows (folded), each type with its count and a thin bar
+// Short names where the full one doesn't fit the row (the full name is the accessible name and the
+// tooltip, and is used everywhere else).
+const SHORT_LABELS = {};                          // one name everywhere (decision #77)
 const openGroups = new Set();                     // groups unfolded this visit (all folded at first)
 let catCounts = new Map();                        // complaints per type in the chosen dates (every type)
 function renderCategories() {
@@ -227,7 +249,7 @@ function renderCategories() {
   const total = meta.categories.length;
   $('#offenses-count').textContent = state.cats.size === total ? `all ${total}` : `${state.cats.size} of ${total}`;
   const max = Math.max(1, ...meta.categories.map((c) => catCounts.get(c.code) ?? 0));
-  const count = (n) => (catCounts.size ? tnum(fmt(n)) : '');
+  const count = (n) => (catCounts.size ? `<span class="cat-count">${tnum(fmt(n))}</span>` : '');
   const only = (codes, name) => `<button type="button" class="cat-only" data-only="${codes.join(',')}" data-focus="only:${codes.join(',')}" aria-label="Show only ${name}">Only</button>`;
   let html = '';
   for (const g of Object.keys(GROUP_LABELS)) {
@@ -240,7 +262,7 @@ function renderCategories() {
     const codes = cats.map((c) => c.code);
     html += `<div class="cat-row group" style="--g:${GROUP_COLORS[g]}">
       <button type="button" class="cat-check" role="checkbox" aria-checked="${checked}" data-group="${g}" data-focus="g:${g}">
-        <span class="box" aria-hidden="true"></span><span class="name">${GROUP_LABELS[g]}</span><span class="cat-n">${count(n)}</span></button>
+        <span class="box" aria-hidden="true"></span><span class="name"><i class="swatch" aria-hidden="true"></i><span class="label-text">${GROUP_LABELS[g]}</span></span><span class="cat-n">${count(n)}</span></button>
       ${only(codes, GROUP_LABELS[g].toLowerCase())}
       ${single ? '<span class="cat-fold" aria-hidden="true" style="visibility:hidden"></span>'
         : `<button type="button" class="cat-fold" aria-expanded="${open}" aria-controls="types-${g}" data-fold="${g}" data-focus="f:${g}" aria-label="${open ? 'Hide' : 'Show'} the types of ${GROUP_LABELS[g].toLowerCase()}"></button>`}
@@ -248,14 +270,16 @@ function renderCategories() {
     if (single) continue;
     html += `<div class="cat-types" id="types-${g}" style="--g:${GROUP_COLORS[g]}"${open ? '' : ' hidden'}>
       ${g === 'enforcement' ? '<span class="group-note">Mostly police activity, not reports by residents</span>' : ''}`;
-    for (const c of cats) {
+    // Most complaints first (for the chosen dates); groups keep their place so they don't jump.
+    const byCount = [...cats].sort((a, b) => (catCounts.get(b.code) ?? 0) - (catCounts.get(a.code) ?? 0));
+    for (const c of byCount) {
       const hidden = state.notMapped.has(c.code);
       const v = catCounts.get(c.code) ?? 0;
       html += `<div class="cat-row">
         <button type="button" class="cat-check" role="checkbox" aria-checked="${state.cats.has(c.code)}" data-code="${c.code}" data-focus="c:${c.code}"
+          aria-label="${c.label}" title="${c.label}${hidden ? ': location withheld by NYPD, counted in totals, not drawn' : ''}"
           ${hidden ? `aria-description="Location withheld by NYPD: counted in totals, not drawn"` : ''}>
-          <span class="box" aria-hidden="true"></span><span class="name">${c.label}${hidden ? ' <span class="mark" aria-hidden="true">†</span>' : ''}</span><span class="cat-n">${count(v)}</span>
-          <span class="cat-bar" aria-hidden="true"><i style="width:${(100 * v) / max}%"></i></span></button>
+          <span class="box" aria-hidden="true"></span><span class="name"><span class="label-text">${SHORT_LABELS[c.label] ?? c.label}</span>${hidden ? '<span class="mark" aria-hidden="true">†</span>' : ''}</span><span class="cat-n">${count(v)}<span class="cat-bar" aria-hidden="true"><i style="width:${(100 * v) / max}%"></i></span></span></button>
         ${only([c.code], c.label.toLowerCase())}
         <span class="cat-fold" aria-hidden="true" style="visibility:hidden"></span>
       </div>`;
@@ -309,27 +333,44 @@ let lastLegend = null;
 function renderLegend(spec = lastLegend) {
   if (!spec || !meta) return;
   lastLegend = spec;
+  document.querySelector('.legend').classList.toggle('points', !!spec.points);
+  if (spec.points) {                               // zoomed in: dots, sized by count, colored by group
+    const what = selectionWords();
+    $('#legend-title').textContent = `Complaint locations, ${[what, periodLabel()].filter(Boolean).join(', ')}`;
+    $('#legend-hint').textContent = 'Each dot is a point where NYPD placed complaints, rounded to mid-block or the nearest intersection; it is never one address. Its size grows with the number of complaints there, and its color is the offense group with the most complaints there. Rape and sex crimes are never placed on the map.';
+    const groups = Object.entries(GROUP_LABELS).map(([g, l]) => `<span class="pk-group"><i style="background:${GROUP_COLORS[g]}"></i>${{ person: 'Persons', property: 'Property', enforcement: 'Enforcement', other: 'Other' }[g] ?? l}</span>`).join('');
+    const sizes = [1, 10, 50].map((n) => { const r = spec.radius(n); return `<span class="pk-size"><svg width="${2 * r + 2}" height="20" aria-hidden="true"><circle cx="${r + 1}" cy="10" r="${r}"/></svg>${n}</span>`; }).join('');
+    $('.legend-ramp').innerHTML = '';
+    $('.legend-labels').innerHTML = `<div class="pk-row"><span class="pk-k">Color: most frequent group</span>${groups}</div>
+      <div class="pk-row"><span class="pk-k">Size: complaints at this location</span>${sizes}</div>
+      <p class="pk-note">Locations are rounded to mid-block or intersection.</p>`;
+    $('.legend-few').hidden = true;
+    return;
+  }
   const { ramp, breaks, unit, rate, few } = spec;
   const what = selectionWords();
   const tail = [what, periodLabel()].filter(Boolean).join(', ');
   $('#legend-title').textContent = rate ? `Complaints per 1,000 residents a year, ${tail}`
-    : `Complaints per hexagon (180 m), ${tail}`;
+    : `Complaints per hexagon, ${tail}`;
   $('#legend-hint').textContent = rate
     ? 'Precincts and boroughs are colored by complaints per 1,000 residents (2020 Census) per year, in six classes with about the same number of precincts each, rounded to friendly numbers. Boroughs use the same classes. Precincts with fewer than 2,000 residents are hatched, not rated. Rape and sex crimes are included.'
-    : 'Hexagons are colored in six classes that each hold about a sixth of the hexagons with complaints anywhere in the city, rounded to friendly numbers. The classes change only when you change the dates or offenses, so panning never recolors the map.';
-  const fmtB = (v) => (rate ? (v >= 100 ? fmt(Math.round(v)) : String(+v.toFixed(1))) : fmtShort(v));
-  const ranges = ramp.map((_, i) => {
-    if (i === 0) return rate ? `<${fmtB(breaks[0])}` : `1–${fmtB(breaks[0])}`;
-    if (i === ramp.length - 1) return `${rate ? fmtB(breaks[i - 1]) : fmtB(breaks[i - 1] + 1)}+`;
-    const lo = rate ? breaks[i - 1] : breaks[i - 1] + 1;
-    return lo === breaks[i] ? fmtB(lo) : `${fmtB(lo)}–${fmtB(breaks[i])}`;
-  });
-  if (!breaks.length || breaks.some((b) => !Number.isFinite(b))) {     // nothing to classify
+    : 'Each hexagon is 180 m across a side, about 8 blocks. Colors split the hexagons with complaints anywhere in the city at the 20th, 40th, 60th, 80th and 95th percentiles, rounded to friendly numbers, so the darkest shade is the top 5%. The classes change only when you change the dates or offenses, so panning never recolors the map. Column height shows the count too.';
+  if (!breaks.length || breaks.some((b) => !Number.isFinite(b))) {     // nothing to classify (yet: before the first counts)
     $('.legend-ramp').innerHTML = '';
     $('.legend-labels').innerHTML = '<span>No complaints to show</span>';
     $('.legend-few').hidden = true;
     return;
   }
+  const fmtB = (v) => (rate ? (v >= 100 ? fmt(Math.round(v)) : String(+v.toFixed(1))) : fmtShort(v));
+  // Ranges that don't overlap: rates as "under 40 · 40–49 · … · 100+" when the breaks are whole numbers.
+  const whole = rate && breaks.every((b) => Number.isInteger(b) && b >= 10);
+  const ranges = ramp.map((_, i) => {
+    if (i === 0) return rate ? `under ${fmtB(breaks[0])}` : `1–${fmtB(breaks[0])}`;
+    if (i === ramp.length - 1) return `${rate ? fmtB(breaks[i - 1]) : fmtB(breaks[i - 1] + 1)}+`;
+    const lo = rate ? breaks[i - 1] : breaks[i - 1] + 1;
+    const hi = whole ? breaks[i] - 1 : breaks[i];
+    return lo === hi ? fmtB(lo) : `${fmtB(lo)}–${fmtB(hi)}`;
+  });
   $('.legend-ramp').style.setProperty('--k', ramp.length);
   $('.legend-ramp').innerHTML = ramp.map((c) => `<span style="background:${c}"></span>`).join('');
   $('.legend-labels').innerHTML = ranges.map((r) => `<span>${tnum(r)}</span>`).join('');
@@ -338,14 +379,41 @@ function renderLegend(spec = lastLegend) {
 
 function renderCity({ total, precinctOnly, previous, base, days }) {
   showSummary({ total, base: base && { ...base, n: previous }, cityRate: true,
-    ratio: { value: (total / (meta.totals.population_2020 / 1000) / (days / 365.25)).toFixed(1), label: 'Per 1,000 residents',
-      note: 'a year, 2020 Census', words: `${(total / (meta.totals.population_2020 / 1000) / (days / 365.25)).toFixed(1)} per 1,000 residents a year` },
+    ratio: { value: (total / (meta.totals.population_2020 / 1000) / (days / 365.25)).toFixed(1), label: 'Rate',
+      note: 'per 1,000 residents a year (2020 Census)', words: `${(total / (meta.totals.population_2020 / 1000) / (days / 365.25)).toFixed(1)} per 1,000 residents a year` },
     notes: [precinctOnly ? `${fmt(precinctOnly)} have their location withheld by NYPD: counted, not on the map.` : ''] });
 }
 
 const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-const helpMark = (text) => (text
-  ? ` <button type="button" class="q" aria-label="${esc(text)}" title="${esc(text)}">?</button>` : '');
+const helpMark = (text, label = 'this') => (text
+  ? ` <button type="button" class="q" aria-expanded="false" aria-label="How ${esc(label.toLowerCase())} is measured" data-help="${esc(text)}">?</button>` : '');
+// The tiles' "?": a short explanation under the tiles; one open at a time, Esc or a second click closes.
+let helpOpen = null;
+function closeHelp({ focus = false } = {}) {
+  if (!helpOpen) return;
+  helpOpen.setAttribute('aria-expanded', 'false');
+  document.querySelector('.help-pop')?.remove();
+  if (focus) helpOpen.focus();
+  helpOpen = null;
+}
+function setupHelpMarks() {
+  $('.figures').addEventListener('click', (e) => {
+    const q = e.target.closest('.q[data-help]');
+    if (!q) return;
+    const same = helpOpen === q;
+    closeHelp();
+    if (same) return;
+    const pop = document.createElement('p');
+    pop.className = 'help-pop';
+    pop.id = 'help-pop';
+    pop.setAttribute('role', 'note');
+    pop.textContent = q.dataset.help;
+    $('.figures').after(pop);
+    q.setAttribute('aria-expanded', 'true');
+    q.setAttribute('aria-controls', 'help-pop');
+    helpOpen = q;
+  });
+}
 /** Change against the baseline (2019, or the period before): tile value, note and the words for
  *  the lead sentence. Small counts (under 20) give both numbers instead of a percentage. */
 function changeOf(total, base) {
@@ -364,21 +432,27 @@ function changeOf(total, base) {
   return { value, note, words };
 }
 /** The panel's lead sentence and three tiles: Total · Compared with the city · Change since 2019. */
-function showSummary({ total, totalNote = '', ratio = { value: 'n/a' }, label = 'Compared with the city', base, notes = [] }) {
-  const change = changeOf(total, base);
+function showSummary({ total, totalNote = '', ratio = { value: 'n/a' }, label = 'Compared with the city', base, notes = [], changeOverride = null, leadParts = null }) {
+  const change = changeOverride ?? changeOf(total, base);
   const parts = [`${fmt(total)} complaint${total === 1 ? '' : 's'} in ${periodLabel()}`];
-  if (ratio.words) parts.push(ratio.words);
-  if (change.words) parts.push(change.words);
+  if (leadParts) parts.push(...leadParts);
+  else {
+    if (ratio.words) parts.push(ratio.words);
+    if (change.words) parts.push(change.words);
+  }
   $('.lead').textContent = `${parts.join(', ')}.`;
   if (total === 0) {
     $('.lead').innerHTML = `No complaints of this type here in ${periodLabel()}. <button type="button" class="chip reset-filters">Reset filters</button>`;
     $('.lead .reset-filters').onclick = resetFilters;
   }
-  const tile = (l, v, note = '', help = '') => `<div class="figure"><div class="label">${l}${helpMark(help)}</div>
-    <div class="value">${v}</div>${note ? `<div class="fnote">${note}</div>` : ''}</div>`;
+  // A ledger, not KPI cards (decision #77): short label, the number, a comparison line; "?" in the corner.
+  const short = (l) => ({ 'Compared with the city': 'vs city', 'Compared with typical': 'vs typical' }[l] ?? l.replace(/^Change since /, 'vs '));
+  const tile = (l, v, note = '', help = '') => `<div class="figure"><div class="label">${short(l)}</div>${helpMark(help, l)}
+    <div class="value${/^[−+]?[\d.,]+[×%]?$|<span/.test(v) ? (String(v).replace(/<[^>]+>/g, '').length > 6 ? ' long' : '') : ' text'}">${v}</div>${note ? `<div class="fnote">${note}</div>` : ''}</div>`;
+  closeHelp();
   $('.figures').innerHTML = tile('Total', tnum(fmt(total)), totalNote || 'complaints')
     + tile(ratio.label ?? label, ratio.value, ratio.note ?? '', ratio.help ?? '')
-    + tile(base?.label ?? 'Change', change.value, change.note,
+    + tile(changeOverride?.label ?? base?.label ?? 'Change', change.value, change.note,
       base ? `The same months in ${base.label.replace(/^Change since /, '')}${base.scale === 1 ? '' : ' (a whole year, against this period\'s yearly average)'}, same offenses.${base.label.endsWith('2019') ? ' 2019 is the last year before the pandemic changed reporting.' : ''}` : '');
   $('.figures-note').textContent = notes.filter(Boolean).join('\n');
 }
@@ -393,15 +467,24 @@ const percentileOf = (values, x) => Math.round((100 * values.filter((v) => v < x
 
 function renderBars(rows) {
   const byCat = new Map(rows.map((r) => [r.cat, r.n]));
+  // Each bar in its offense group's color (decision #78): the same four colors as the dots and the
+  // offense list, so a dot's color can be read off its panel. Above them, the totals by group, in
+  // order, which say why a dot has the color it has (its most frequent group).
   const items = meta.categories
     .filter((c) => state.cats.has(c.code))
-    .map((c) => ({ label: c.label, n: byCat.get(c.code) ?? 0 }))
+    .map((c) => ({ label: c.label, group: c.group, n: byCat.get(c.code) ?? 0 }))
     .sort((a, b) => b.n - a.n);
   const shown = state.showAllBars ? items : items.slice(0, 8);
   const max = Math.max(1, ...items.map((i) => i.n));
-  const color = chartColor();
-  $('.bars').innerHTML = shown.map(({ label, n }) => `<div class="bar"><span class="name">${label}</span><span class="num">${tnum(fmt(n))}</span>
-      <span class="track"><span class="fill" style="width:${Math.max(0.6, (n / max) * 100)}%;background:${color}"></span></span></div>`).join('');
+  const groups = Object.keys(GROUP_LABELS)
+    .map((g) => ({ g, n: items.filter((i) => i.group === g).reduce((t, i) => t + i.n, 0) }))
+    .filter((x) => x.n > 0).sort((a, b) => b.n - a.n);
+  const total = groups.reduce((t, x) => t + x.n, 0);
+  const short = { person: 'Persons', property: 'Property', enforcement: 'Enforcement', other: 'Other' };
+  $('.group-split').innerHTML = groups.length > 1 ? `<div class="split-bar" aria-hidden="true">${groups.map((x) => `<i style="width:${(100 * x.n) / total}%;background:${GROUP_COLORS[x.g]}"></i>`).join('')}</div>
+    <p class="split-keys">${groups.map((x) => `<span><i style="background:${GROUP_COLORS[x.g]}" aria-hidden="true"></i>${short[x.g]}&nbsp;<b>${tnum(fmt(x.n))}</b></span>`).join('')}</p>` : '';
+  $('.bars').innerHTML = shown.map(({ label, group, n }) => `<div class="bar"><span class="name">${label}</span><span class="num">${tnum(fmt(n))}</span>
+      <span class="track"><span class="fill" style="width:${Math.max(0.6, (n / max) * 100)}%;background:${GROUP_COLORS[group]}"></span></span></div>`).join('');
   const more = $('.more');
   more.hidden = items.length <= 8;
   more.textContent = state.showAllBars ? 'Show fewer' : `Show all ${items.length}`;
@@ -419,7 +502,7 @@ function renderSummary({ total, precinctOnly, none, noPrecinct, noBorough }) {
   const missing = byBorough ? noBorough : noPrecinct;
   $('#summary-sub').textContent = state.view === 'precincts'
     ? (missing > 0 ? `${fmt(missing)} have no ${byBorough ? 'borough' : 'precinct'}.` : `All are drawn by ${byBorough ? 'borough' : 'precinct'}.`)
-    : `${fmt(precinctOnly + none)} have no location on the map.`;
+    : (precinctOnly + none ? `${fmt(precinctOnly + none)} can't be placed on the map.` : '');
 }
 
 // ---------- selection: a neighborhood (NTA) or a hexagon, shown in the right panel
@@ -432,7 +515,9 @@ const filterLabel = () => {
 };
 
 function renderHeader(title, context) {
-  $('.detail h2').textContent = title;
+  // Hyphenated names never break at the hyphen ("Bedford-/Stuyvesant"): each stays on one line.
+  $('.detail h2').innerHTML = String(title).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/(\S+-\S+)/g, '<span class="nobr">$1</span>');
   $('.detail .sub').textContent = filterLabel();
   const ctx = $('.detail .context');
   ctx.innerHTML = context ?? '';
@@ -443,7 +528,7 @@ function renderHeader(title, context) {
   ctx.querySelector('[data-boro]')?.addEventListener('click', (e) => selectBorough(+e.currentTarget.dataset.boro));
 }
 
-function selectNta(code, { move = false } = {}) {
+function selectNta(code, { move = isPhone() } = {}) {
   const feature = ntaGeo.features.find((f) => f.properties.code === code);
   state.selected = { kind: 'nta', code };
   setSelection(feature, 'area', meta.ntas[code]?.name);
@@ -473,7 +558,7 @@ async function ensurePrecincts() {
   setPrecinctShapes(precinctGeo);
 }
 const precinctMerged = () => Math.min(...monthsOf(state.period)) < SPLIT_MONTH;
-function selectPrecinct(props, { move = false } = {}) {
+function selectPrecinct(props, { move = isPhone() } = {}) {
   state.selected = { kind: 'precinct', props };
   const feature = precinctGeo.features.find((f) => f.properties === props || (f.properties.pct === props.pct && !props.merged));
   setSelection(feature, 'area', feature && precinctName(feature.properties));
@@ -492,6 +577,7 @@ async function selectPrecinctNumber(pct) {
 function selectHex(q, r) {
   state.selected = { kind: 'hex', q, r };
   setSelection(hexPolygon(q, r));
+  if (isPhone()) fitTo(bounds(hexPolygon(q, r)), { maxZoom: 14.5, duration: 900 });
   setPin(null);
   refresh();
 }
@@ -502,6 +588,24 @@ function selectPoint(lngLat, label, corner = false) {
   setSelection(circlePolygon(lngLat, RADIUS_M, 72), 'circle', label);
   setPin(lngLat);
   flyToPoint(lngLat);
+  refresh();
+}
+/** One complaint location (a dot on the zoomed-in map): every complaint NYPD placed at that point.
+ *  A small ring marks it; no pin, because a complaint location is never shown as an address. */
+const SPOT_EPS = 1e-7;
+/** NYPD premise names in sentence case: "RESIDENCE - APT. HOUSE" -> "Residence, apt. house". */
+const premiseLabel = (code) => {
+  const raw = meta.premises[code];
+  if (!raw) return 'Not recorded';
+  const t = raw.toLowerCase().replace(/\s*-\s*/g, ', ').replace(/\//g, ' / ').replace(/\bnyc\b/g, 'NYC');
+  return t[0].toUpperCase() + t.slice(1);
+};
+const spotSql = ([lon, lat]) => `abs(lat - ${lat}) < ${SPOT_EPS} AND abs(lon - ${lon}) < ${SPOT_EPS}`;
+function selectSpot(lngLat) {
+  state.selected = { kind: 'spot', lngLat };
+  if (isPhone()) flyToPoint(lngLat, 16, 900);
+  setSelection(circlePolygon(lngLat, 18, 36), 'ring');
+  setPin(null);
   refresh();
 }
 // ---------- block highlight (hovering a block in a chart lights it on the map)
@@ -645,7 +749,7 @@ function onPick(pick) {
   if (pick.kind === 'borough') return selectBorough(pick.code);
   if (pick.kind === 'none') return clearSelection();
   if (pick.kind === 'hex') return selectHex(pick.q, pick.r);
-  if (pick.kind === 'point') { const { q, r } = hexAt(pick.lngLat); return selectHex(q, r); }
+  if (pick.kind === 'point') return selectSpot(pick.lngLat);
   const f = featureAt(ntaGeo, pick.lngLat);
   return f ? selectNta(f.properties.code) : clearSelection();
 }
@@ -787,6 +891,8 @@ async function renderSelection(ticket) {
         : { value: 'n/a', note: 'few or no residents' } });
     renderBars(byCat);
     $('.detail .note').textContent = `${RESIDENT_NOTE} Precinct counts use NYPD's precinct field and include every complaint, also rape and sex crimes. Population: 2020 Census blocks inside the precinct.`;
+  } else if (sel.kind === 'spot') {
+    await renderSpot(sel, ticket, base, sum);
   } else if (sel.kind === 'point') {
     await renderPoint(sel, ticket, base, top, sum);
   } else if (sel.kind === 'street') {
@@ -813,6 +919,55 @@ async function renderSelection(ticket) {
     renderBars(byCat);
     $('.detail .note').textContent = 'NYPD places each complaint at the nearest intersection or mid-block, so a hexagon counts the complaints snapped inside it. Rape and sex crimes are never placed on the map.';
   }
+}
+
+/** A single complaint location: its complaints, compared with every location in the city. */
+async function renderSpot(sel, ticket, base, sum) {
+  const at = spotSql(sel.lngLat);
+  const start = monthsOf(state.period)[0];
+  const [byCat, prev, streets, history, prem] = await Promise.all([
+    query(`SELECT cat, sum(n)::INTEGER AS n FROM points WHERE ${at} AND ${where()} GROUP BY 1`),
+    base ? query(`SELECT sum(n)::INTEGER AS n FROM points WHERE ${at} AND ${where(base.months)}`) : [{ n: 0 }],
+    query(`SELECT street, block FROM loc_street WHERE ${at}`),
+    query(`SELECT min(m)::INTEGER AS first, count(DISTINCT m) FILTER (WHERE m < ${start})::INTEGER AS before FROM points WHERE ${at}`),
+    query(`SELECT prem, count(*)::INTEGER AS n FROM incidents WHERE lt = 0 AND ${at} AND ${where()} GROUP BY 1 ORDER BY 2 DESC LIMIT 1`),
+    loadStreets(loadJson),
+  ]);
+  if (ticket !== pending) return;
+  const total = sum(byCat);
+  const [cityRow] = await query(`SELECT median(n)::DOUBLE AS med, count(*)::INTEGER AS locs,
+      count(*) FILTER (WHERE n < ${total})::INTEGER AS below
+    FROM (SELECT sum(n) AS n FROM points WHERE ${where()} GROUP BY lat, lon)`);
+  if (ticket !== pending) return;
+  // Its name: the corner (two or more streets meet here) or the block of its street.
+  const names = [...new Set(streets.map((r) => streetById(r.street)?.name).filter(Boolean))];
+  const block = streets.find((r) => r.block >= 0);
+  const title = names.length >= 2 ? `${names[0]} & ${names[1]}`
+    : names.length === 1 ? (block ? `${blockLabel(block.block)} ${names[0]}` : names[0]) : 'Complaint location';
+  if (!sel.label) {
+    sel.label = title;
+    setSelection(circlePolygon(sel.lngLat, 18, 36), 'ring', title);
+  }
+  const nta = featureAt(ntaGeo, sel.lngLat);
+  renderHeader(title, `A location where NYPD placed complaints${names.length >= 2 ? ', at the corner' : ''}${nta ? ` in <button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>` : ''}`);
+  const med = cityRow?.med ?? 0;
+  // A point with less than a year of history before the period was most likely created by a change in
+  // how NYPD places complaints: no comparison with 2019 (it would read as an explosion). The lead
+  // sentence says what kind of place it is instead.
+  // (Only when there could have been history: a period that starts in 2016 has none to compare.)
+  const isNew = start >= 12 && (history[0]?.before ?? 0) < 12;
+  const firstYear = history[0]?.first != null ? 2016 + Math.floor(history[0].first / 12) : null;
+  const topPrem = prem[0] && total ? { label: premiseLabel(prem[0].prem).toLowerCase(), share: Math.round((100 * prem[0].n) / total) } : null;
+  const premWords = topPrem && topPrem.share >= 50 && !/^(street|not recorded)$/.test(topPrem.label) ? `${topPrem.share}% recorded at a ${topPrem.label}${/store|transit|station|office|bank|hospital|commercial/i.test(topPrem.label) ? ' (often filed by the business or station, not on the street)' : ''}` : null;
+  showSummary({ total, totalNote: 'at this point', base: isNew ? null : base && { ...base, n: prev[0]?.n ?? 0 }, label: 'Compared with typical',
+    changeOverride: isNew ? { label: 'Earlier comparison', value: firstYear ? `New since ${firstYear}` : 'New point', note: 'no earlier history at this point', words: '' } : null,
+    leadParts: isNew ? [premWords ?? `a point first used in ${firstYear}`] : null,
+    ratio: med > 0 && total > 0 ? { value: fmtIndex(total / med), note: `${ordinal(Math.min(99, Math.floor((100 * cityRow.below) / Math.max(1, cityRow.locs))))} percentile, locations`,
+      words: `${fmtIndex(total / med)} the typical location`,
+      help: `Complaints at this point ÷ the median of the ${fmt(cityRow.locs)} locations in the city with complaints, same dates and offenses (median: ${fmt(med)}). Percentile: share of those locations with fewer.` }
+      : { value: 'n/a' } });
+  renderBars(byCat);
+  $('.detail .note').textContent = 'NYPD rounds each complaint to the middle of the block or the nearest intersection, so this point holds every complaint placed on this stretch of street or corner, not at one address. Rape and sex crimes are never placed on the map.';
 }
 
 /** Address or corner: complaints within 200 m, compared with 200 m circles every 100 m over
@@ -914,7 +1069,11 @@ const yearsOf = (months) => [...new Set(months.map((m) => 2016 + Math.floor(m / 
 function chartColor() {
   const g = selectionGroup();
   const dark = document.documentElement.dataset.theme === 'dark';
-  return dark ? RAMPS.dark[4] : RAMPS.light[4];    // one data color, whatever the offense filter
+  return dark ? RAMPS.dark[5] : RAMPS.light[4];    // one data color, whatever the offense filter (≥ 7:1)
+}
+/** Unselected columns: a lighter step of the same ramp, still ≥ 3:1 on the panel. */
+function chartColorOff() {
+  return document.documentElement.dataset.theme === 'dark' ? RAMPS.dark[3] : RAMPS.light[3];
 }
 
 /** Rows {lat, lon, ...} inside a hexagon or a 200 m circle (the SQL box is only a first cut). */
@@ -972,7 +1131,7 @@ async function chartContext(sel) {
         blocks: areaBlocks('points p', `p.nta IN (${ntas.join(',')})`),
         areas: async (months, cats) => (await query(`SELECT nta, sum(n)::INTEGER AS n FROM agg_nta
           WHERE nta IN (${ntas.join(',')}) AND ${monthSql(months)} AND cat IN (${catList(cats)}) GROUP BY 1`))
-          .map((r) => ({ key: r.nta, label: meta.ntas[r.nta].name, n: r.n, residential: meta.ntas[r.nta].type === 'residential' })),
+          .map((r) => ({ key: r.nta, label: meta.ntas[r.nta].name, n: r.n, pop: meta.ntas[r.nta].population, residential: meta.ntas[r.nta].type === 'residential' })),
       };
     }
     case 'precinct': {
@@ -998,6 +1157,30 @@ async function chartContext(sel) {
           WHERE street = ${sel.id} AND block >= 0 AND ${monthSql(months)} AND cat IN (${catList(cats)}) GROUP BY 1`))
           .map((r) => ({ key: r.block, street: sel.id, block: r.block, n: r.n, order: r.block, label: blockLabel(r.block),
             short: r.block >= 1_000_000 ? `${Math.floor((r.block - 1_000_000) / 1000)}-` : String(r.block) })),
+      };
+    }
+    case 'spot': {
+      const at = spotSql(sel.lngLat);
+      return {
+        name: sel.label ?? 'Complaint location', nycByCat: nycMapped, blocks: null,
+        spot: {
+          premises: async (months, cats) => (await query(`SELECT prem, count(*)::INTEGER AS n FROM incidents
+            WHERE lt = 0 AND ${at} AND ${monthSql(months)} AND cat IN (${catList(cats)}) GROUP BY 1 ORDER BY 2 DESC`))
+            .map((r) => ({ label: premiseLabel(r.prem), n: r.n })),
+          each: async (months, cats) => (await query(`SELECT d, hour, dow, cat, prem, att FROM incidents
+            WHERE lt = 0 AND ${at} AND ${monthSql(months)} AND cat IN (${catList(cats)}) ORDER BY d, hour LIMIT 60`))
+            .map((r) => ({ ...r, prem: r.prem >= 0 ? premiseLabel(r.prem) : '' })),
+          days: (months, cats) => query(`SELECT d, count(*)::INTEGER AS n FROM incidents
+            WHERE lt = 0 AND ${at} AND ${monthSql(months)} AND cat IN (${catList(cats)}) GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 5`),
+        },
+        byCat: () => cachedQuery(`spot:${sel.lngLat}`, `SELECT m, cat, sum(n)::INTEGER AS n FROM points WHERE ${at} GROUP BY 1, 2`),
+        time: async (months, cats) => {
+          const rows = await query(`SELECT dow, hour, count(*)::INTEGER AS n FROM incidents
+            WHERE lt = 0 AND ${at} AND ${monthSql(months)} AND cat IN (${catList(cats)}) GROUP BY 1, 2`);
+          const grid = Array.from({ length: 7 }, () => new Array(24).fill(0));
+          for (const r of rows) if (r.dow >= 0 && r.hour >= 0) grid[r.dow][r.hour] += r.n;
+          return { grid, years: null };
+        },
       };
     }
     case 'hex':
@@ -1041,11 +1224,16 @@ async function renderCharts(ticket) {
   if (!list.children.length) list.innerHTML = '<p class="charts-loading">Loading charts</p>';
   const src = await chartContext(state.selected);
   if (!src || ticket !== pending) return;
-  const compare = comparisonOf(state.period);
+  // One baseline everywhere (decision #77): the same as the panel's tiles, the same months of 2019
+  // (or the period before, for periods that start before 2020). A longer period is compared as its
+  // yearly average (prevScale).
+  const base = baselineOf(state.period);
   const report = await buildReport({
     ...src, kind: state.selected.kind, period: state.period, months: monthsOf(state.period),
-    prevMonths: compare?.months ?? null, prevLabel: compare?.label ?? '', periodLabel: periodLabel(),
-    cats: state.cats, categories: meta.categories, color: chartColor(), highlightBlock, clearHighlight,
+    prevMonths: base?.months ?? null, prevLabel: base ? base.label.replace(/^Change since /, 'vs ') : '', prevScale: base?.scale ?? 1,
+    periodLabel: periodLabel(),
+    cats: state.cats, categories: meta.categories, color: chartColor(), colorOff: chartColorOff(), highlightBlock, clearHighlight,
+    groupColor: (cat) => GROUP_COLORS[meta.categories[cat]?.group ?? 'other'],
     highlightArea, selectArea: (code) => selectNta(code, { move: true }), selectBlock,
   });
   if (ticket !== pending) return;
@@ -1180,6 +1368,10 @@ function renderNotice({ drawable, total }) {
       precinct station house, so we count them in the totals on the right but do not draw them.</p>`;
   } else if (total > 0) {
     el.innerHTML = '<strong>Nothing to draw for this selection</strong><p>These complaints have no location in the data. They are counted in the totals on the right.</p>';
+  } else if (!state.cats.size) {                  // the cause is the filter, not the data
+    el.innerHTML = `<strong>No offenses selected</strong>
+      <p>Choose at least one offense type to see complaints.</p><button type="button" class="chip select-all">Select all</button>`;
+    el.querySelector('.select-all').onclick = () => document.querySelector('[data-select="all"]').click();
   } else {
     el.innerHTML = `<strong>No complaints of this type in ${periodLabel()}</strong>
       <p>Choose more offense types or other dates.</p><button type="button" class="chip reset-filters">Reset filters</button>`;
@@ -1308,9 +1500,9 @@ function placeForPhone() {
   if (phone) {
     $('.phone-search-slot').append(search);
     $('.bs-peek').append(areas);
-    let slot = $('.bs-body .dek-slot');
-    if (!slot) { slot = document.createElement('div'); slot.className = 'dek-slot'; $('.bs-body').prepend(slot); }
-    slot.append(dek, $('.progress'));
+    // The dek leads the peek row: the one-sentence answer is visible without touching anything.
+    $('.bs-peek').prepend(dek);
+    $('.bs-peek').append($('.progress'));
     $('.bs-foot').before(detail);
     document.body.dataset.sheet = 'full';
     $('.dek-card').hidden = true;
@@ -1342,7 +1534,7 @@ function setupPhone() {
     if (!drag) return;
     const dy = drag.y - e.clientY;
     if (Math.abs(dy) > 6) drag.moved = true;
-    const h = Math.max(96, Math.min(innerHeight * 0.92, drag.h + dy));
+    const h = Math.max(132, Math.min(innerHeight * 0.92, drag.h + dy));
     sheet.style.setProperty('--bs-h', `${h}px`);
   };
   const end = () => {
@@ -1354,7 +1546,7 @@ function setupPhone() {
     if (wasTap) return;
     handle.dataset.dragged = '1';
     setTimeout(() => delete handle.dataset.dragged, 0);
-    const snaps = [['peek', 96], ['half', innerHeight * 0.5], ['full', innerHeight * 0.92]];
+    const snaps = [['peek', 132], ['half', innerHeight * 0.5], ['full', innerHeight * 0.92]];
     setSnap(snaps.reduce((a, b) => (Math.abs(b[1] - h) < Math.abs(a[1] - h) ? b : a))[0]);
   };
   for (const el of [handle, $('.bs-peek')]) {
@@ -1444,7 +1636,12 @@ async function main() {
 
   // The engine (DuckDB, ~35 MB the first time) loads in the background while the map and the
   // controls come up; every query waits for it on its own.
-  initDb();
+  // If the engine can't start, say so: otherwise every filter would wait for it forever.
+  initDb().catch((err) => {
+    console.error('[nycmap] the data engine could not start:', err);
+    clearStale();
+    $('#summary-sub').textContent = `The data engine could not start (${err.message}), so filters can't be applied. Reload the page to try again.`;
+  });
   progress(8);
   const boroughsP = loadJson('boroughs.geojson');             // the veil and borough outlines, first thing on the map
   const [metaText, g] = await Promise.all([loadText('meta.json'), loadJson('nta.geojson')]);
@@ -1508,6 +1705,7 @@ async function main() {
   addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (keyHelp?.open()) { keyHelp.close(); return; }
+    if (helpOpen) { closeHelp({ focus: true }); return; }
     if (phoneFilters?.open()) { phoneFilters.close(); return; }
     if (document.activeElement?.closest('.search') && !$('#search-results').hidden) return;   // search handles its own Esc
     if (state.selected) clearSelection();
@@ -1536,6 +1734,7 @@ async function main() {
   setupTheme();
   setupAreas();
   keyHelp = setupKeyHelp();
+  setupHelpMarks();
   loadMonthly();
   renderCategories();
   setUniverse(cells);
@@ -1559,7 +1758,7 @@ async function main() {
     window.__nycmap = map;
     window.__hexStats = hexStats;
     window.__setSpan = (a, b) => { customOpen = false; setSpan(a, b); };
-    window.__select = { city: selectCity, precinct: (pct) => (precinctGeo ? selectPrecinct(precinctUnit(pct)) : selectPrecinctNumber(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, point: selectPoint, street: selectStreet, clear: clearSelection };
+    window.__select = { city: selectCity, precinct: (pct) => (precinctGeo ? selectPrecinct(precinctUnit(pct)) : selectPrecinctNumber(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, point: selectPoint, spot: selectSpot, street: selectStreet, clear: clearSelection };
   }
   await refresh();
   // If the first map came from the start cache, ask again once the engine is ready (same numbers,

@@ -10,7 +10,7 @@ const base = process.argv[2] ?? 'http://localhost:5173/';
 const sql = process.argv[3] ?? 'http://localhost:8765';
 const out = process.argv[4] ?? 'tests/screens';
 const RAMPS = {
-  dark: ['#512f4f', '#7a4475', '#a15e9c', '#c57fbf', '#e3a6dd', '#facef4'],
+  dark: ['#6b3767', '#834d7e', '#9c6496', '#b57baf', '#cf94c9', '#e9ade3'],
   light: ['#f3ddf0', '#dcb1d7', '#c287bc', '#a15e9c', '#7c3b77', '#532150'],
 };
 const hex = (rgbStr) => '#' + rgbStr.match(/\d+/g).slice(0, 3).map((v) => (+v).toString(16).padStart(2, '0')).join('');
@@ -27,6 +27,7 @@ const settle = (page) => page.evaluate(() => new Promise((res) => {
 
 for (const theme of ['dark', 'light']) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  page.setDefaultTimeout(90000);                         // software GL is slow with the taller columns
   page.on('pageerror', (e) => errors.push(`${theme}: ${e.message}`));
   page.on('console', (m) => m.type() === 'error' && errors.push(`${theme} console: ${m.text()}`));
   await page.goto(`${base}?db=${encodeURIComponent(sql)}&basemap=none&theme=${theme}`);

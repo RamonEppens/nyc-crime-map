@@ -8,7 +8,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { ColumnLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer, PathLayer, TextLayer } from '@deck.gl/layers';
 import { basemapStyle, PAPER } from './basemap.js';
-import { RAMPS, PRECINCT_RAMPS, GROUP_COLORS, rgb, classify, quantileBreaks, niceBreaks } from './colors.js';
+import { RAMPS, PRECINCT_RAMPS, GROUP_COLORS, rgb, classify, quantileBreaks, niceBreaks, textOn, HEX_PROBS } from './colors.js';
 import { fmt } from './format.js';
 import { setGrid, hexCenter } from './geo.js';
 
@@ -21,7 +21,7 @@ const VIEW = { center: [-73.965, 40.715], zoom: 11, pitch: PHONE ? 0 : TILT, bea
 const VIEW_2D = { center: [-73.94, 40.70], zoom: 10.1, pitch: 0, bearing: 0 };     // all five boroughs
 const VIEW_MS = 800;                // hexagons <-> precincts cross-fade and camera move
 const PAN_LIMITS = [[-74.6, 40.35], [-73.3, 41.05]];
-const MAX_HEIGHT_M = 1320;          // tallest column, meters (linear in n / max); 60% of the first 2200
+const MAX_HEIGHT_M = 2200;          // tallest column, meters (linear in n / max); color separates the core, height the peaks
 const ZOOM_FADE = [12.5, 13.7];     // columns -> points transition
 const POINTS_MARGIN = 0.35;         // load points for the view plus 35% on each side
 
@@ -58,6 +58,7 @@ const hexRamp = () => RAMPS[theme];
 const precinctRamp = () => PRECINCT_RAMPS[theme];
 const easeOutCubic = (t) => 1 - (1 - t) ** 3;
 
+export const pointRadius = (n) => Math.min(9, 1.6 + 0.55 * Math.sqrt(n));   // dot radius, px
 const smoothstep = (a, b, x) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -109,6 +110,7 @@ export async function createMap(container, opts) {
     maybeLoadPoints();
   });
   await new Promise((resolve) => (map.loaded() ? resolve() : map.once('load', resolve)));
+  if (state.view === 'precincts') map.fitBounds([[-74.26, 40.495], [-73.70, 40.915]], { padding: padding({ panel: false }), duration: 0 });
   return map;
 }
 
@@ -254,7 +256,8 @@ export function setView(view, { tilt = tilted } = {}) {
   requestAnimationFrame(step);
   if (view === 'precincts') {
     lockFlat(true);
-    map.easeTo({ pitch: 0, bearing: 0, zoom: Math.min(map.getZoom(), 12), duration: motion(VIEW_MS) });
+    // All five boroughs on entry (Staten Island and the Bronx were cut off).
+    map.fitBounds([[-74.26, 40.495], [-73.70, 40.915]], { padding: padding({ panel: false }), pitch: 0, bearing: 0, duration: motion(VIEW_MS) });
   } else {
     lockFlat(false);
     map.easeTo({ pitch: tilted && !PHONE ? TILT : 0, bearing: tilted ? VIEW.bearing : 0, duration: motion(VIEW_MS) });
@@ -318,7 +321,7 @@ export function setHexagons(rows, label) {
   if (!grown) growIn();
   state.label = label;
   // City-wide breaks, once per filter: a hexagon keeps its color when the map is panned.
-  state.breaks = niceBreaks(hexes.map((d) => d.n));
+  state.breaks = niceBreaks(hexes.map((d) => d.n), 6, HEX_PROBS);
   updateBreaks();
   render();
   state.pointsBox = null;                        // filters changed: points must be reloaded
@@ -374,7 +377,7 @@ function labelPoint(feature, style) {
   let w = 180, s = 90, e = -180, n = -90;
   const walk = (c) => (typeof c[0] === 'number' ? (w = Math.min(w, c[0]), e = Math.max(e, c[0]), s = Math.min(s, c[1]), n = Math.max(n, c[1])) : c.forEach(walk));
   walk(g.coordinates);
-  return style === 'circle' || style === 'outline' ? [(w + e) / 2, n] : [(w + e) / 2, (s + n) / 2];
+  return style === 'circle' || style === 'outline' || style === 'ring' ? [(w + e) / 2, n] : [(w + e) / 2, (s + n) / 2];
 }
 const isArea = (f) => /Polygon/.test(f?.geometry?.type ?? '');
 const HIGHLIGHTER = [255, 205, 40];             // highlighter-pen yellow (#FFCD28)
@@ -409,15 +412,16 @@ export function setPin(lngLat) {
 }
 
 /** Camera padding that keeps clear of the left sheet and the details panel (both may change). */
-function padding() {
+function padding({ panel: assumePanel = true } = {}) {
   const sheet = document.querySelector('.bsheet');
   if (matchMedia('(max-width: 767px)').matches && sheet) {          // phones: keep clear of the bottom sheet
-    const h = Math.max(96, Math.min(sheet.getBoundingClientRect().height, innerHeight * 0.5));
-    return { top: 80, bottom: h + 16, left: 24, right: 24 };
+    // Details open at half height: keep the place in the map above the sheet.
+    return { top: 80, bottom: innerHeight * 0.5 + 16, left: 24, right: 24 };
   }
   const left = (document.querySelector('.controls')?.getBoundingClientRect().right ?? 0) + 40;
   const panel = document.querySelector('.detail');
-  const right = (panel && !panel.hidden ? panel.offsetWidth : 0) + 60;
+  // Selections open the panel, so fit as if it were there already (380 px), even on the first one.
+  const right = (panel && !panel.hidden ? panel.offsetWidth : assumePanel ? 380 : 0) + 60;
   const w = map.getContainer().clientWidth;
   if (left + right > w - 120) return { top: 60, bottom: 60, left: 20, right: 20 };   // phones: the sheet is below
   return { top: 70, bottom: 70, left, right };
@@ -512,6 +516,10 @@ function updateBreaks() {
       few: state.unit2d === 'precinct' && precincts.units.some((u) => u.shown && u.few) });
     return;
   }
+  if (state.pointsKey) {
+    hooks.onLegend?.({ points: true, groups: GROUP_COLORS, radius: pointRadius });
+    return;
+  }
   hooks.onLegend?.({ ramp: hexRamp(), breaks: state.breaks, unit: 'hexagon', rate: false });
 }
 
@@ -540,6 +548,9 @@ function render() {
   const m = smoothstep(ZOOM_FADE[0], ZOOM_FADE[1], map.getZoom());
   const ramp = hexRamp().map(rgb);
   const k = 1 - state.mix;                          // 1 = hexagon view, 0 = precinct view
+  // The key follows the encoding: dots once they are the more opaque layer (zoom ~13.1).
+  const pointsKey = m >= 0.5 && k > 0.5;
+  if (pointsKey !== !!state.pointsKey) { state.pointsKey = pointsKey; updateBreaks(); }
   const columns = new ColumnLayer({
     id: 'hex',
     data: state.hexes,
@@ -569,7 +580,7 @@ function render() {
     data: state.points,
     getPosition: (d) => [d.lon, d.lat],
     radiusUnits: 'pixels',
-    getRadius: (d) => Math.min(9, 1.6 + 0.55 * Math.sqrt(d.n)),   // area grows with the count
+    getRadius: (d) => pointRadius(d.n),            // area grows with the count
     getFillColor: (d) => rgb(GROUP_COLORS[categories[d.cat]?.group ?? 'other']),
     stroked: true,
     getLineColor: tk('paper'),                       // 1 px casing in the land color
@@ -604,7 +615,7 @@ function render() {
     id: 'selection',
     data: selData,
     stroked: true,
-    filled: style === 'area' || style === 'circle',
+    filled: style === 'area',
     getFillColor: [...ink, style === 'circle' ? 22 : 14],
     getLineColor: [...ink, 255],
     lineWidthUnits: 'pixels',
@@ -646,28 +657,25 @@ function render() {
     parameters: { depthCompare: 'always' },
     updateTriggers: { getLineWidth: hl },
   });
-  // The selection's name, set on the map in the headline serif, like a label on a printed map.
-  const label = state.selectionLabel && new TextLayer({
-    id: 'selection-label',
-    data: [state.selectionLabel],
-    getPosition: (d) => d.position,
-    getText: (d) => d.text,
-    getSize: 16,
-    fontFamily: '"Newsreader Variable", Georgia, serif',
-    fontWeight: 600,
-    characterSet: 'auto',
-    fontSettings: { sdf: false, fontSize: 48 },
-    background: true,                              // a paper slip, like a label pasted on the map
-    getBackgroundColor: [...casingRgb, 238],
-    backgroundPadding: [6, 2, 6, 3],
-    getColor: [...ink, 255],
-    getPixelOffset: state.selectionStyle === 'circle' || state.selectionStyle === 'outline' ? [0, -12] : [0, 0],
-    getTextAnchor: 'middle',
-    getAlignmentBaseline: state.selectionStyle === 'circle' || state.selectionStyle === 'outline' ? 'bottom' : 'center',
+  // The selection's name, set on the map in the headline serif, with a thin paper halo (ink on the
+  // light map, paper text with an ink halo on the dark one).
+  const around = state.selectionStyle === 'circle' || state.selectionStyle === 'outline' || state.selectionStyle === 'ring';
+  const label = state.selectionLabel ? haloText({
+    id: 'selection-label', data: [state.selectionLabel], mix: 1, pale: () => theme === 'dark',
+    triggers: `${theme}|${state.selectionLabel.text}|${state.selectionStyle}`, text: (d) => d.text, serif: true, size: 16,
+    dy: around ? -12 : 0, baseline: around ? 'bottom' : 'center',
+  }) : [];
+  // An address or corner: no grey fill inside the 200 m circle (the dots keep their true colors);
+  // the outside is veiled at 25% instead.
+  const veil = state.selection && state.selectionStyle === 'circle' && state.selection.geometry.type === 'Polygon' && new SolidPolygonLayer({
+    id: 'selection-veil',
+    data: [{ polygon: [[[-74.6, 40.3], [-73.3, 40.3], [-73.3, 41.1], [-74.6, 41.1]], state.selection.geometry.coordinates[0]] }],
+    getPolygon: (d) => d.polygon,
+    getFillColor: [...tk('paper'), 64],
     parameters: { depthCompare: 'always' },
-    updateTriggers: { getColor: theme, getBackgroundColor: theme, getPixelOffset: state.selectionStyle },
+    updateTriggers: { getFillColor: theme },
   });
-  overlay.setProps({ layers: [columns, points, ...precinctLayers(), casing, outline, label, highlightEdge, highlight].filter(Boolean) });
+  overlay.setProps({ layers: [columns, points, ...precinctLayers(), veil, casing, outline, ...label, highlightEdge, highlight].filter(Boolean) });
 }
 
 function precinctLayers() {
@@ -718,23 +726,27 @@ function precinctSet(mix) {
     opacity: mix,
     updateTriggers: { getColor: theme },
   });
-  const labels = new TextLayer({
-    id: 'precinct-labels',
-    data: units.filter((x) => x.shown),
+  // Numbers in ink or paper, whichever contrasts more with the fill, with a halo of the other
+  // (two layers, because the halo color is per layer).
+  const paperText = (d) => textOn(precinctRamp()[classify(d.rate, state.precinctBreaks)]) === 'paper';
+  const numberLayer = (id, pale) => new TextLayer({
+    id,
+    data: units.filter((x) => x.shown && !x.few && paperText(x) === pale),
     getPosition: (d) => d.props.label,
-    getText: (d) => (d.few ? '' : String(d.props.merged ? d.props.merged.join('·') : d.props.pct)),
+    getText: (d) => String(d.props.merged ? d.props.merged.join('·') : d.props.pct),
     getSize: 12,
     fontFamily: '"Schibsted Grotesk Variable", system-ui, sans-serif',
     fontWeight: 600,
     characterSet: 'auto',
-    lineHeight: 1.2,
-    fontSettings: { sdf: true },
-    // Numbers in ink on pale fills, in paper on the three deepest classes (no halo needed).
-    getColor: (d) => (!d.few && classify(d.rate, state.precinctBreaks) >= 3 ? [...TOKENS.paper.light, 255] : [...TOKENS.ink.light, 255]),
+    fontSettings: { sdf: true, fontSize: 64, buffer: 8 },
+    getColor: pale ? [...TOKENS.paper.light, 255] : [...TOKENS.ink.light, 255],
+    outlineWidth: 2.5,
+    outlineColor: pale ? [...TOKENS.ink.light, 190] : [...TOKENS.paper.light, 200],
     opacity: mix,
     visible: map.getZoom() >= 10.3,
-    updateTriggers: { getText: version, getColor: triggers },
+    updateTriggers: { getText: version },
   });
+  const labels = [numberLayer(`precinct-labels-ink-${triggers}`, false), numberLayer(`precinct-labels-paper-${triggers}`, true)];
   // Labels on the hatch get a halo in the land color, so they read over the lines.
   const fewLabels = new TextLayer({
     id: 'precinct-few-labels',
@@ -754,7 +766,7 @@ function precinctSet(mix) {
     visible: map.getZoom() >= 10.3,
     updateTriggers: { getText: version },
   });
-  return [fills, few, borders, labels, fewLabels];
+  return [fills, few, borders, ...labels, fewLabels];
 }
 
 /** Diagonal lines (every ~120 m) clipped to the precincts with few residents. */
@@ -790,6 +802,27 @@ function hatchLines() {
   return lines;
 }
 
+/** Crisp text with a thin halo: a bitmap atlas (no SDF blur) drawn eight times, 1.25 px around, in
+ *  the halo tone, then once on top. `pale(d)`: paper text with an ink halo; otherwise the reverse. */
+function haloText({ id, data, mix, pale, triggers, text, serif, size, dy = 0, anchor = 'middle', baseline = 'center' }) {
+  const common = {
+    data, getPosition: (d) => d.position ?? d.props.label, getText: text, getSize: size,
+    fontFamily: serif ? '"Newsreader Variable", Georgia, serif' : '"Schibsted Grotesk Variable", system-ui, sans-serif',
+    fontWeight: 600, characterSet: 'auto', fontSettings: { sdf: false, fontSize: 64, buffer: 4 },
+    getTextAnchor: anchor, getAlignmentBaseline: baseline, opacity: mix, parameters: { depthCompare: 'always' },
+    updateTriggers: { getText: triggers, getColor: triggers, getPixelOffset: triggers },
+  };
+  const r = 1.25;
+  const rings = [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, r], [r, -r], [-r, -r]].map(([x, y], i) => new TextLayer({
+    ...common, id: `${id}-halo-${i}`, getPixelOffset: (d) => [x, y + (typeof dy === 'function' ? dy(d) : dy)],
+    getColor: (d) => (pale(d) ? [...TOKENS.ink.light, 150] : [...TOKENS.paper.light, 200]),
+  }));
+  return [...rings, new TextLayer({
+    ...common, id, getPixelOffset: (d) => [0, typeof dy === 'function' ? dy(d) : dy],
+    getColor: (d) => (pale(d) ? [...TOKENS.paper.light, 255] : [...TOKENS.ink.light, 255]),
+  })];
+}
+
 /** The five boroughs: same look as the precincts, with the name and the count written inside. */
 function boroughSet(mix) {
   if (mix <= 0 || !boroughs.units.length) return [];
@@ -811,24 +844,16 @@ function boroughSet(mix) {
   });
   // No outlines: the borough file is a union of many pieces whose shared edges would show as
   // stray lines; boroughs are told apart by their fills and the water between them.
-  const labels = new TextLayer({
-    id: 'borough-labels',
-    data: units,
-    getPosition: (d) => d.props.label,
-    getText: (d) => `${d.props.name} · ${d.rate == null ? '' : d.rate.toFixed(1)} per 1,000`,
-    getSize: 16,
-    fontFamily: '"Newsreader Variable", Georgia, serif',
-    fontWeight: 600,
-    characterSet: 'auto',
-    fontSettings: { sdf: true, fontSize: 96, buffer: 12, radius: 12, smoothing: 0.2 },
-    // A halo in the land color, so the value reads on any shade.
-    outlineWidth: 2,
-    outlineColor: [...tk('paper'), 255],
-    getColor: [...tk('ink'), 255],
-    opacity: mix,
-    updateTriggers: { getText: version, getColor: triggers },
-  });
-  return [fills, labels];
+  // Two lines, crisp (bitmap atlases; an SDF halo blurred the serif): the name in Newsreader 16 and
+  // the rate in Schibsted 14 under it, in ink or paper by the fill, with a thin halo of the other.
+  const pale = (d) => d.rate != null && textOn(precinctRamp()[classify(d.rate, breaks)]) === 'paper';
+  const name = haloText({ id: 'borough-name', data: units, mix, pale, triggers: `${version}|${triggers}`,
+    text: (d) => d.props.name, serif: true, size: 16, dy: -9 });
+  const value = haloText({ id: 'borough-value', data: units, mix, pale, triggers: `${version}|${triggers}`,
+    text: (d) => (d.rate == null ? '' : `${d.rate.toFixed(1)} per 1,000 residents`), serif: false, size: 14, dy: 9 });
+  const halo = [...name, ...value];
+  const labels = [];
+  return [fills, ...halo, ...labels];
 }
 
 export const precinctName = (props) => (props.merged
