@@ -2,7 +2,7 @@
 // narrow panel and in the expanded one. Rules (dataviz method): one y-axis only; thin marks
 // (columns <= 24 px, 4 px rounded data end, square at the baseline; 2 px lines); hairline solid
 // grid; text in text colors, never the series color; a hover tooltip on every mark.
-import { fmt, fmtShort } from './format.js';
+import { fmt, fmtShort, complaints } from './format.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const el = (name, attrs = {}, text) => {
@@ -85,6 +85,41 @@ function columnPath(x, y, w, h) {
   return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
 }
 
+/** Shortens `part` (a text or tspan inside `text`) with an ellipsis until `text` fits in `max` px;
+ *  the full words stay in a <title> for the tooltip and screen readers. */
+function fitText(text, part, max, full) {
+  if (!(text.getComputedTextLength?.() > max)) return;
+  let s = full;
+  while (s.length > 4 && text.getComputedTextLength() > max) {
+    s = s.slice(0, -1);
+    part.textContent = `${s.trimEnd()}…`;
+  }
+  text.append(el('title', {}, full));
+}
+
+/** X-axis labels never touch: the first starts at the plot edge when it would reach the y-axis
+ *  numbers, and a label that would touch the one before it is dropped (the last one is kept). */
+function spaceLabels(labels, left, right = Infinity) {
+  if (!labels.length) return;
+  const w = (t) => t.getComputedTextLength?.() ?? 0;
+  const first = labels[0];
+  if (+first.getAttribute('x') - w(first) / 2 < left - 4) { first.setAttribute('text-anchor', 'start'); first.setAttribute('x', left); }
+  const end = labels.at(-1);
+  if (end !== first && +end.getAttribute('x') + w(end) / 2 > right) { end.setAttribute('text-anchor', 'end'); end.setAttribute('x', right); }
+  const edges = (t) => {
+    const x = +t.getAttribute('x');
+    const a = t.getAttribute('text-anchor');
+    return a === 'start' ? [x, x + w(t)] : a === 'end' ? [x - w(t), x] : [x - w(t) / 2, x + w(t) / 2];
+  };
+  const last = labels.at(-1);
+  let prevRight = -Infinity;
+  for (const t of labels) {
+    const [l, r] = edges(t);
+    if (t !== last && (l < prevRight + 6 || (labels.length > 1 && r > edges(last)[0] - 6))) { t.remove(); continue; }
+    prevRight = r;
+  }
+}
+
 function frame(host, height) {
   host.querySelector(':scope > svg')?.remove();
   const width = Math.max(240, host.clientWidth);
@@ -117,18 +152,20 @@ export function columns(host, { data, line = null, lineLabel = '', color, colorO
   const band = (width - m.left - m.right) / data.length;
   const bw = Math.min(24, band * 0.62);
   const y = (v) => m.top + (height - m.top - m.bottom) * (1 - v / max);
+  const labels = [];
   data.forEach((d, i) => {
     const x = m.left + band * i + (band - bw) / 2;
     // Unselected columns in a lighter step of the same ramp (not transparency), so they keep 3:1.
     const p = el('path', { d: columnPath(x, y(d.value), bw, y(0) - y(d.value)), fill: d.on || !colorOff ? color : colorOff, class: d.on ? 'col on' : colorOff ? 'col dim' : 'col off' });
     svg.append(p);
-    if (i % every === 0 || i === data.length - 1) {
-      svg.append(el('text', { x: x + bw / 2, y: height - 6, 'text-anchor': 'middle', class: d.on ? 'tick strong' : 'tick' }, d.label));
+    if (d.label && (i % every === 0 || i === data.length - 1)) {
+      labels.push(svg.appendChild(el('text', { x: x + bw / 2, y: height - 6, 'text-anchor': 'middle', class: d.on ? 'tick strong' : 'tick' }, d.label)));
     }
     const hit = el('rect', { x: m.left + band * i, y: m.top, width: band, height: height - m.top - m.bottom, class: 'hit' });
     hover(hit, d, tip, p);
     svg.append(hit);
   });
+  spaceLabels(labels, m.left, width - 1);
   if (axisNote) svg.append(el('text', { x: m.left, y: 8, class: 'tick' }, axisNote));
   if (line) {
     const pts = line.map((d, i) => (d.value == null ? null : [m.left + band * i + band / 2, y(d.value)]));
@@ -171,7 +208,7 @@ export function lines(host, { series, labels, tips, color, height = 170, tickEve
   shown.forEach((i, j) => {
     if (j % every) return;
     const cx = x(i);
-    const anchor = cx - widest / 2 < 0 ? 'start' : cx + widest / 2 > width ? 'end' : 'middle';
+    const anchor = cx - widest / 2 < m.left - 4 ? 'start' : cx + widest / 2 > width ? 'end' : 'middle';
     svg.append(el('text', { x: cx, y: height - 6, 'text-anchor': anchor, class: 'tick' }, labels[i]));
   });
   // crosshair + tooltip
@@ -222,7 +259,7 @@ export function heatmap(host, { grid, color, height = 176 }) {
         fill: color, 'fill-opacity': (0.06 + 0.94 * (v / max)).toFixed(3), class: 'cell',
       });
       r.addEventListener('mousemove', (e) => tip.show(
-        `<strong>${dname} ${String(h).padStart(2, '0')}:00–${String(h).padStart(2, '0')}:59</strong><br>${fmt(v)} complaints · ${((100 * v) / total).toFixed(1)}%`, e));
+        `<strong>${dname} ${String(h).padStart(2, '0')}:00–${String(h).padStart(2, '0')}:59</strong><br>${complaints(v)} · ${((100 * v) / total).toFixed(1)}%`, e));
       r.addEventListener('mouseleave', () => tip.hide());
       svg.append(r);
     }
@@ -251,16 +288,18 @@ export function dumbbells(host, { rows, color, beforeLabel, nowLabel }) {
   const height = rows.length * rowH + 26;
   const { svg, width, tip } = frame(host, height);
   const narrow = width < 420;
-  const m = { left: narrow ? 140 : 180, right: 52, top: 18, bottom: 8 };
+  const m = { left: narrow ? 158 : 190, right: 52, top: 18, bottom: 8 };
   const max = Math.max(1, ...rows.flatMap((r) => [r.before, r.now]));
   const { max: top } = niceTicks(max, 3);
   const x = (v) => m.left + (width - m.left - m.right) * (v / top);
-  svg.append(el('text', { x: m.left, y: 11, class: 'tick' }, `○ ${beforeLabel}   ● ${nowLabel}`));
+  const key = svg.appendChild(el('text', { x: m.left, y: 11, class: 'tick' }, `○ ${beforeLabel}   ● ${nowLabel}`));
+  if (m.left + key.getComputedTextLength() > width) key.setAttribute('x', 0);   // long period names: use the label column too
   rows.forEach((r, i) => {
     const y = m.top + rowH * i + rowH / 2;
     svg.append(el('line', { x1: m.left, x2: width - m.right, y1: y, y2: y, class: 'grid' }));
-    const label = r.label.length > (narrow ? 21 : 27) ? `${r.label.slice(0, narrow ? 20 : 26)}…` : r.label;
-    svg.append(el('text', { x: m.left - 8, y: y + 4, 'text-anchor': 'end', class: 'row-label' }, label));
+    const label = el('text', { x: m.left - 8, y: y + 4, 'text-anchor': 'end', class: 'row-label' }, r.label);
+    svg.append(label);
+    fitText(label, label, m.left - 10, r.label);
     // Earlier -> later with an arrowhead, so the direction reads even where the dots overlap.
     const dir = Math.sign(r.now - r.before);
     const x1 = x(r.before), x2 = x(r.now);
@@ -272,7 +311,7 @@ export function dumbbells(host, { rows, color, beforeLabel, nowLabel }) {
     svg.append(el('circle', { cx: x(r.before), cy: y, r: 4.5, class: 'db-before' }));
     svg.append(el('circle', { cx: x(r.now), cy: y, r: 4.5, fill: color, class: 'db-now' }));
     const ch = r.before ? ((r.now - r.before) / r.before) * 100 : null;
-    const txt = r.before < 20 || r.now < 20 ? `${fmt(r.before)}→${fmt(r.now)}` : `${ch > 0 ? '+' : ch < 0 ? '−' : ''}${Math.abs(ch).toFixed(0)}%`;
+    const txt = r.before < 20 || r.now < 20 ? `${fmt(r.before)}→${fmt(r.now)}` : `${Math.round(ch) > 0 ? '+' : Math.round(ch) < 0 ? '−' : ''}${Math.abs(Math.round(ch))}%`;
     svg.append(el('text', { x: width - 4, y: y + 4, 'text-anchor': 'end', class: 'row-value' }, txt));
     const hit = el('rect', { x: 0, y: y - rowH / 2, width, height: rowH, class: r.onClick ? 'hit clickable' : 'hit' });
     hover(hit, r, tip, r.onEnter ? hit : null);
@@ -296,9 +335,11 @@ export function rankBars(host, { rows, color }) {
     const y0 = rowH * i;
     svg.append(el('text', { x: m.left - 8, y: y0 + 15, 'text-anchor': 'end', class: 'tick' }, String(i + 1)));
     const label = el('text', { x: m.left, y: y0 + 15, class: 'row-label' });
-    label.append(el('tspan', {}, r.name));
+    const name = el('tspan', {}, r.name);
+    label.append(name);
     if (r.detail) label.append(el('tspan', { class: 'row-detail', dx: 6 }, r.detail));
     svg.append(label);
+    fitText(label, name, width - m.left - 12, r.name);   // a little slack: the web font can be wider than the fallback
     const bw = Math.max(2, x(r.value));
     svg.append(el('path', { d: barPath(m.left, y0 + 22, bw, 11), fill: color, class: 'rank-bar' }));
     svg.append(el('text', { x: m.left + bw + 6, y: y0 + 31, class: 'bar-value' }, r.valueLabel ?? fmt(r.value)));

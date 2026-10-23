@@ -49,8 +49,18 @@ let remoteOpened = null;
 export const warmRemote = () => (remoteOpened ??= openRemote());
 const REMOTE_RE = new RegExp(`\\b(${['incidents', 'points', 'street_segments', 'street_corners', 'street_blocks', 'agg_time', 'loc_street'].join('|')})\\b`);
 
+/** Test mode (`?db=http://localhost:8765`): queries go to a local SQL server instead of the
+ *  in-browser engine. Only a server on this computer is accepted, so a crafted link can never send
+ *  someone's searches to another site. */
+export const testEngine = (() => {
+  try {
+    const u = new URL(params.get('db') ?? '');
+    return ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) ? u.origin : null;
+  } catch { return null; }
+})();
+
 export async function initDb() {
-  const httpEngine = params.get('db');
+  const httpEngine = testEngine;
   if (httpEngine) {
     run = async (sql) => {
       const res = await fetch(`${httpEngine}/sql`, { method: 'POST', body: sql });

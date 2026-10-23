@@ -2,8 +2,9 @@
 // of selection; each module decides by itself whether it applies (and says why not), at what time
 // resolution, and with what color, from three things: the dates picked, the offense types picked
 // and how many complaints there are. The first module, "Over the years", is always shown.
+import { FEW_RESIDENTS } from './map.js';
 import { columns, lines, heatmap, smallBars, dumbbells, rankBars, timeline } from './charts.js';
-import { fmt, fmtChange } from './format.js';
+import { fmt, fmtChange, complaints } from './format.js';
 
 const FIRST_YEAR = 2016;
 const YEARS = Array.from({ length: 10 }, (_, i) => FIRST_YEAR + i);
@@ -96,12 +97,12 @@ export async function buildReport(ctx) {
     const label = first === last ? `${last}${unit}` : `${first} to ${last}${unit}, a year on average`;
     const usedAfter2019 = isSpot && py.findIndex((v) => v > 0) > B;    // a point created later: no 2019 comparison
     if (mode !== 'crossyear' && ref(py) != null && !usedAfter2019) {
-      answer = `${label}: ${fmt(nowP)} complaints, ${change(nowP, py[B])} vs 2019`
+      answer = `${label}: ${complaints(nowP)}, ${change(nowP, py[B])} vs 2019`
         + (noNyc ? '.' : ` (NYC ${change(nowN, ny[B])}).`);
     } else {
       const a = mode === 'crossyear' ? FIRST_YEAR : first;
       const b = mode === 'crossyear' ? YEARS.at(-1) : last;
-      answer = a === b ? `${a}${unit}: ${fmt(py[iy(a)])} complaints.`
+      answer = a === b ? `${a}${unit}: ${complaints(py[iy(a)])}.`
         : `${a} to ${b}${unit}: ${change(py[iy(b)], py[iy(a)])}${noNyc ? '' : ` here, ${change(ny[iy(b)], ny[iy(a)])} in NYC`}.`;
     }
     // A point that only appears in later years: say so (NYPD's placement changes; earlier complaints
@@ -119,7 +120,7 @@ export async function buildReport(ctx) {
         color: ctx.color, colorOff: ctx.colorOff, axisNote: indexed ? '2019 = 100' : '',
         data: YEARS.map((y, i) => ({
           label: `'${String(y).slice(2)}`, value: indexed ? idx(py, i) : py[i], on: on(y),
-          tip: `<strong>${y}${unit}</strong><br>${fmt(py[i])} complaints${isCity ? '' : ' here'}${indexed ? ` (index ${Math.round(idx(py, i))})` : ''}`
+          tip: `<strong>${y}${unit}</strong><br>${complaints(py[i])}${isCity ? '' : ' here'}${indexed ? ` (index ${Math.round(idx(py, i))})` : ''}`
             + (indexed ? `<br>NYC: ${fmt(ny[i])} (index ${Math.round(idx(ny, i))})` : ''),
         })),
         line: indexed ? YEARS.map((_, i) => ({ value: idx(ny, i) })) : null,
@@ -131,7 +132,7 @@ export async function buildReport(ctx) {
   if (!['year', 'yearRange', 'monthRange'].includes(mode)) {
     hidden.push({ title: 'Month by month', why: 'pick a year or a range to see it month by month' });
   } else if (total < 30) {
-    hidden.push({ title: 'Month by month', why: `only ${fmt(total)} complaints, too few for a monthly line` });
+    hidden.push({ title: 'Month by month', why: `only ${complaints(total)}, too few for a monthly line` });
   } else {
     const short = months.length <= 24;
     const labels = months.map((m) => (short ? (m % 12 === 0 || months.length <= 13 ? MONTHS[m % 12] : MONTHS[m % 12]) : m % 12 === 0 ? String(yearOf(m)) : ''));
@@ -152,7 +153,7 @@ export async function buildReport(ctx) {
       const a1 = avg.at(-1);
       answer = `12-month average: ${fmt(a0)} a month at the start, ${fmt(a1)} at the end (${change(a1, a0)}). Busiest month: ${MONTH_NAMES[peak % 12]} ${yearOf(peak)}.`;
     }
-    const tips = months.map((m, i) => `<strong>${MONTH_NAMES[m % 12]} ${yearOf(m)}</strong><br>${fmt(P[m])} complaints`
+    const tips = months.map((m, i) => `<strong>${MONTH_NAMES[m % 12]} ${yearOf(m)}</strong><br>${complaints(P[m])}`
       + (short && m >= 12 ? `<br>${MONTH_NAMES[m % 12]} ${yearOf(m) - 1}: ${fmt(P[m - 12])}` : '')
       + (!short && series[1]?.values[i] != null ? `<br>12-month average: ${fmt(series[1].values[i])}` : ''));
     sections.push({
@@ -170,7 +171,7 @@ export async function buildReport(ctx) {
     } else if (mode !== 'yearRange' || years.length < 2) {
       hidden.push({ title: 'When in the year', why: 'needs a range of two or more whole years' });
     } else if (total < 120) {
-      hidden.push({ title: 'When in the year', why: `only ${fmt(total)} complaints, too few for a seasonal pattern` });
+      hidden.push({ title: 'When in the year', why: `only ${complaints(total)}, too few for a seasonal pattern` });
     } else {
       const share = (arr) => {
         const byM = Array.from({ length: 12 }, (_, k) => sum(years.map((y) => arr[(y - FIRST_YEAR) * 12 + k])));
@@ -202,14 +203,14 @@ export async function buildReport(ctx) {
     const flat = t.grid.flat();
     const n = sum(flat);
     if (n < 100) {
-      hidden.push({ title: 'Day and hour', why: `only ${fmt(n)} complaints with a time, too few for a pattern` });
+      hidden.push({ title: 'Day and hour', why: `only ${complaints(n)} with a time, too few for a pattern` });
       return null;
     }
     let bd = 0; let bh = 0;
     t.grid.forEach((row, d) => row.forEach((v, h) => { if (v > t.grid[bd][bh]) { bd = d; bh = h; } }));
     const nights = sum(t.grid.flatMap((row) => row.filter((_, h) => h >= 22 || h < 6)));
     const weekend = sum(t.grid[5]) + sum(t.grid[6]);
-    const yearsNote = t.years ? ` Uses whole report years ${t.years[0]}${t.years.length > 1 ? `–${t.years.at(-1)}` : ''}.` : '';
+    const yearsNote = t.years ? (t.years.length > 1 ? ` Uses the whole report years ${t.years[0]}–${t.years.at(-1)}.` : ` Uses the whole report year ${t.years[0]}.`) : '';
     const sec = {
       id: 'time', title: 'Day and hour',
       answer: `Busiest: ${DAYS[bd]}s around ${hourLabel(bh)}. Nights (10 pm–6 am): ${((100 * nights) / n).toFixed(0)}% of complaints; weekends: ${((100 * weekend) / n).toFixed(0)}% (two of seven days is 29%).`,
@@ -221,7 +222,7 @@ export async function buildReport(ctx) {
       const byHour = Array.from({ length: 24 }, (_, h) => sum(t.grid.map((row) => row[h])));
       sec.draw = (host) => smallBars(host, {
         values: byHour, labels: byHour.map((_, h) => hourLabel(h).replace(' ', '')), labelEvery: 6, color: ctx.color,
-        tips: byHour.map((v, h) => `<strong>${hourLabel(h)}</strong><br>${fmt(v)} complaints`),
+        tips: byHour.map((v, h) => `<strong>${hourLabel(h)}</strong><br>${complaints(v)}`),
       });
     }
     return sec;
@@ -245,10 +246,13 @@ export async function buildReport(ctx) {
         return null;
       }
       const label = ctx.categories[c].label;
+      // First and last years with complaints here (a location may start or stop being used).
+      const i0 = sp.findIndex((v) => v != null);
+      const i1 = sp.length - 1 - [...sp].reverse().findIndex((v) => v != null);
       return {
         id: 'mix', title: `${label}: share of all complaints`,
-        answer: `${label} was ${sp[0]?.toFixed(1)}% of complaints${noNyc ? '' : ' here'} in 2016 and ${sp.at(-1)?.toFixed(1)}% in 2025`
-          + (noNyc ? '.' : ` (NYC: ${sn[0]?.toFixed(1)}% → ${sn.at(-1)?.toFixed(1)}%).`),
+        answer: `${label} was ${sp[i0].toFixed(1)}% of complaints${noNyc ? '' : ' here'} in ${YEARS[i0]}${i1 > i0 ? ` and ${sp[i1].toFixed(1)}% in ${YEARS[i1]}` : ''}`
+          + (noNyc ? '.' : ` (NYC: ${sn[i0]?.toFixed(1)}%${i1 > i0 ? ` → ${sn[i1]?.toFixed(1)}%` : ''}).`),
         legend: noNyc ? [] : [['main', 'This place'], ['cmp', 'NYC']],
         draw: (host) => lines(host, {
           series: noNyc ? [{ values: sp, cls: 'main' }] : [{ values: sn, cls: 'cmp' }, { values: sp, cls: 'main' }],
@@ -334,7 +338,7 @@ export async function buildReport(ctx) {
     tasks.push((async () => {
       const rows = await ctx.spot.premises(months, ctx.cats);
       const n = sum(rows.map((r) => r.n));
-      if (n < 10) { hidden.push({ title: 'What kind of place', why: `only ${fmt(n)} complaints` }); return null; }
+      if (n < 10) { hidden.push({ title: 'What kind of place', why: `only ${complaints(n)}` }); return null; }
       const top = rows.slice(0, 6);
       const share = (v) => `${Math.round((100 * v) / n)}%`;
       return {
@@ -342,24 +346,24 @@ export async function buildReport(ctx) {
         answer: `Reported as ${top[0].label.toLowerCase()} (${share(top[0].n)})${top[1] ? `, then ${top[1].label.toLowerCase()} (${share(top[1].n)})` : ''}.`,
         note: 'The premise type the officer recorded for each complaint. A store, a station or an office here often means complaints filed by the business, not on the street.',
         draw: (host) => rankBars(host, { color: ctx.color, rows: top.map((r) => ({ name: r.label, detail: share(r.n), value: r.n,
-          tip: `<strong>${r.label}</strong><br>${fmt(r.n)} complaints, ${share(r.n)}` })) }),
+          tip: `<strong>${r.label}</strong><br>${complaints(r.n)}, ${share(r.n)}` })) }),
       };
     })());
     tasks.push((async () => {
       const days = await ctx.spot.days(months, ctx.cats);
       const n = total;                                 // every complaint at this point in the period
-      if (n < 20) { hidden.push({ title: 'Busiest days', why: `only ${fmt(n)} complaints` }); return null; }
+      if (n < 20) { hidden.push({ title: 'Busiest days', why: `only ${complaints(n)}` }); return null; }
       const top = days.slice(0, 5);
       const fmtDay = (d) => new Date(Date.UTC(2016, 0, 1 + d)).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
       const topShare = (100 * sum(top.map((r) => r.n))) / n;
       const batch = top[0].n >= 5 && (100 * top[0].n) / n >= 5;
       return {
         id: 'days', title: 'Busiest days',
-        answer: `${fmtDay(top[0].d)}: ${fmt(top[0].n)} complaints (${Math.round((100 * top[0].n) / n)}% of this period). The five busiest days hold ${Math.round(topShare)}%.`
+        answer: `${fmtDay(top[0].d)}: ${complaints(top[0].n)} (${Math.round((100 * top[0].n) / n)}% of this period). The five busiest days hold ${Math.round(topShare)}%.`
           + (batch ? ' Many complaints on one day usually means a batch filed together, not a spike in incidents.' : ' Complaints are spread out over time.'),
         note: 'By report date; shares are of all complaints at this point in the period.',
         draw: (host) => rankBars(host, { color: ctx.color, rows: top.map((r) => ({ name: fmtDay(r.d), value: r.n,
-          tip: `<strong>${fmtDay(r.d)}</strong><br>${fmt(r.n)} complaints` })) }),
+          tip: `<strong>${fmtDay(r.d)}</strong><br>${complaints(r.n)}` })) }),
       };
     })());
   }
@@ -390,7 +394,7 @@ export async function buildReport(ctx) {
           data: ordered.map((b) => ({
             label: b.short, value: b.n, on: topKeys.has(b.key),
             onEnter: () => ctx.highlightBlock?.(b.street, b.block), onLeave: ctx.clearHighlight,
-            tip: `<strong>${b.label}</strong>: ${fmt(b.n)} complaints${ctx.prevMonths ? ` <span class="tip-muted">(${ctx.prevLabel.replace(/^vs /, '')}: ${fmt(prev.get(b.key) ?? 0)})</span>` : ''}`,
+            tip: `<strong>${b.label}</strong>: ${complaints(b.n)}${ctx.prevMonths ? ` <span class="tip-muted">(${ctx.prevLabel.replace(/^vs /, '')}: ${fmt(prev.get(b.key) ?? 0)})</span>` : ''}`,
           })),
         }),
       };
@@ -407,7 +411,7 @@ export async function buildReport(ctx) {
           color: ctx.color,
           rows: top.map((b) => ({
             name: b.name ?? b.label, detail: b.range, value: b.n, ...nav(b),
-            tip: `<strong>${b.label}</strong>: ${fmt(b.n)} complaints${ctx.prevMonths ? ` <span class="tip-muted">(${prevL}: ${fmt(prev.get(b.key) ?? 0)})</span>` : ''}`,
+            tip: `<strong>${b.label}</strong>: ${complaints(b.n)}${ctx.prevMonths ? ` <span class="tip-muted">(${prevL}: ${fmt(prev.get(b.key) ?? 0)})</span>` : ''}`,
           })),
         }),
       };
@@ -436,10 +440,10 @@ export async function buildReport(ctx) {
     const yrsBefore = (ctx.prevMonths?.length ?? 12) / 12;
     const rate = (n, pop, yrs) => (1000 * n) / pop / yrs;
     const rows = now.map((a) => ({ ...a, before: prev.get(a.key) ?? 0 })).filter((a) => a.n + a.before > 0);
-    const rated = rows.filter((a) => a.pop >= 2000)
+    const rated = rows.filter((a) => a.pop >= FEW_RESIDENTS)
       .map((a) => ({ ...a, now: rate(a.n, a.pop, yrsNow), was: rate(a.before, a.pop, yrsBefore) }))
       .sort((a, b) => b.now - a.now);
-    const unrated = rows.filter((a) => !(a.pop >= 2000));
+    const unrated = rows.filter((a) => !(a.pop >= FEW_RESIDENTS));
     if (!rated.length) {
       hidden.push({ title: 'Neighborhoods', why: 'no mapped complaints in this selection' });
       return null;
@@ -468,8 +472,8 @@ export async function buildReport(ctx) {
         draw: withMore(10, (host, list) => rankBars(host, {
           color: ctx.color,
           rows: list.map((a) => ({
-            name: a.label, detail: `${fmt(a.n)} complaints`, value: a.now, valueLabel: r1(a.now), ...nav(a),
-            tip: `<strong>${a.label}</strong><br>${r1(a.now)} per 1,000 residents a year<br>${fmt(a.n)} complaints${ctx.prevMonths ? ` <span class="tip-muted">(${prevL}: ${fmt(a.before)})</span>` : ''}`,
+            name: a.label, detail: `${complaints(a.n)}`, value: a.now, valueLabel: r1(a.now), ...nav(a),
+            tip: `<strong>${a.label}</strong><br>${r1(a.now)} per 1,000 residents a year<br>${complaints(a.n)}${ctx.prevMonths ? ` <span class="tip-muted">(${prevL}: ${fmt(a.before)})</span>` : ''}`,
           })),
         })),
       };
@@ -488,7 +492,7 @@ export async function buildReport(ctx) {
       draw: withMore(12, (host, list) => dumbbells(host, {
         color: ctx.color, beforeLabel: prevL, nowLabel: ctx.periodLabel,
         rows: list.map((a) => ({ label: a.label, before: Math.round(a.was), now: Math.round(a.now), ...nav(a),
-          tip: `<strong>${a.label}</strong><br>${prevL}: ${r1(a.was)} → ${ctx.periodLabel}: ${r1(a.now)} per 1,000 a year<br><span class="tip-muted">${fmt(a.before)} → ${fmt(a.n)} complaints</span>` })),
+          tip: `<strong>${a.label}</strong><br>${prevL}: ${r1(a.was)} → ${ctx.periodLabel}: ${r1(a.now)} per 1,000 a year<br><span class="tip-muted">${fmt(a.before)} → ${complaints(a.n)}</span>` })),
       })),
     };
   })());

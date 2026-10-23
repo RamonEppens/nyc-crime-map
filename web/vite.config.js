@@ -43,7 +43,7 @@ export default defineConfig({
   base: './',
   build: {
     target: 'es2022',
-    rollupOptions: { input: { main: fileURLToPath(new URL('index.html', import.meta.url)), about: fileURLToPath(new URL('about.html', import.meta.url)) } },
+    rollupOptions: { input: { main: fileURLToPath(new URL('index.html', import.meta.url)), about: fileURLToPath(new URL('about.html', import.meta.url)), privacy: fileURLToPath(new URL('privacy.html', import.meta.url)) } },
   },
   worker: { format: 'es' },
   optimizeDeps: { exclude: ['@duckdb/duckdb-wasm'] },

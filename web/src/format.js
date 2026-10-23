@@ -2,6 +2,8 @@ const nf = new Intl.NumberFormat('en-US');
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 
 export const fmt = (n) => nf.format(Math.round(n));
+/** "1 complaint", "2 complaints". */
+export const complaints = (n) => `${nf.format(Math.round(n))} complaint${Math.round(n) === 1 ? '' : 's'}`;
 export const fmtCompact = (n) => (n < 10000 ? nf.format(Math.round(n)) : compact.format(n));
 /** Short labels for the legend: 4,545 -> 4.5K (fits six columns). */
 export const fmtShort = (n) => (n < 1000 ? nf.format(Math.round(n)) : compact.format(n));

@@ -1653,7 +1653,7 @@ async function main() {
   progress(30);
   meta = JSON.parse(metaText);
   ntaGeo = g;
-  if (!params.has('db')) await loadStartCache(metaText);   // first map without waiting for the engine
+  if (!db.testEngine) await loadStartCache(metaText);   // first map without waiting for the engine
   $('.detail .close').onclick = clearSelection;
   $('.charts-open').onclick = () => { setPanelView('charts'); $('.detail-body').scrollTop = 0; renderCharts(pending); };
   $('.charts-back').onclick = () => setPanelView('details');
@@ -1759,7 +1759,7 @@ async function main() {
   const panelWidth = () => document.documentElement.style.setProperty('--panel-w', `${$('.detail').hidden ? 0 : $('.detail').offsetWidth}px`);
   new ResizeObserver(panelWidth).observe($('.detail'));
   new MutationObserver(panelWidth).observe($('.detail'), { attributes: true, attributeFilter: ['hidden'] });
-  if (params.has('db')) {                        // test mode only: hooks for headless tests
+  if (db.testEngine) {                           // test mode only: hooks for headless tests
     window.__nycmap = map;
     window.__hexStats = hexStats;
     window.__pending = () => pending;

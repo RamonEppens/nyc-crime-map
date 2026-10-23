@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy and terms · NYC Crime Map</title>
+  <meta name="description" content="What the NYC Crime Map knows about you (nothing), what your browser remembers, and the terms for using the map and its data." />
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <script>
+    try {
+      const t = localStorage.getItem('theme:v3');
+      document.documentElement.dataset.theme = t === 'dark' || t === 'light' ? t
+        : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    } catch { document.documentElement.dataset.theme = 'light'; }
+  </script>
+  <script type="module" src="/src/about.js"></script>
+</head>
+<body>
+  <header class="about-head">
+    <a class="back" href="./"><img src="logo.png" alt="" width="28" height="28" /> <span>NYC Crime Map</span></a>
+  </header>
+  <main class="about">
+    <h1>Privacy and terms</h1>
+    <p class="dek">The map doesn't know who you are. It has no accounts, no cookies, no analytics, no ads and no tracking of any kind.</p>
+
+    <section id="privacy">
+      <h2>What happens to what you search</h2>
+      <p>Everything you do on the map happens in your browser. When you search an address, it is matched against a list of New York streets that your browser downloads with the map; the address you type is never sent anywhere. Filters, dates and the places you open are worked out on your own device by a small database engine (DuckDB) that runs in the page.</p>
+    </section>
+
+    <section id="storage">
+      <h2>What your browser remembers</h2>
+      <p>To open the map the way you left it, your browser keeps four display settings in its local storage: light or dark map, whether the map is tilted, how areas are drawn (hot spots, precincts or boroughs) and whether the side panel is folded. They stay on your device and are never sent to anyone. Your searches, filters and the places you open are not saved. Clearing this site's data in your browser removes the settings.</p>
+    </section>
+
+    <section id="servers">
+      <h2>Who your browser talks to</h2>
+      <p>Like any website, the map has to be downloaded from somewhere, and those services see the standard information every web request carries, such as your IP address and browser type, under their own privacy policies:</p>
+      <ul>
+        <li><a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub Pages</a> serves the page itself.</li>
+        <li><a href="https://www.cloudflare.com/privacypolicy/">Cloudflare</a> serves the data files.</li>
+        <li><a href="https://carto.com/privacy">CARTO</a> serves the base map (streets, parks, water), so it also sees which part of the city the map is showing.</li>
+      </ul>
+      <p>The fonts and every other part of the page are served with the map itself, not by third parties.</p>
+    </section>
+
+    <section id="data">
+      <h2>About the people in the data</h2>
+      <p>The data is published by the NYPD on NYC Open Data. It has no names, and the NYPD moves each complaint to the middle of the block or the nearest intersection, so a dot is never one person's home. For rape and other sex crimes the NYPD withholds the location entirely; this map counts those complaints but never draws them. The map shows nothing about the age, race or sex of suspects or victims.</p>
+    </section>
+
+    <section id="terms">
+      <h2>Terms of use</h2>
+      <ul>
+        <li>The map shows complaints reported to the NYPD. A complaint is not an arrest or a conviction, and counts don't measure how safe a place is. Please don't use the map to make decisions about people, or as the only basis for decisions about where to live, work or invest.</li>
+        <li>The data is shown as published by the NYPD on NYC Open Data, with the processing described in <a href="about.html">About this data</a>. It can contain errors, and so can the map. Everything is provided as is, without any warranty.</li>
+        <li>The data is subject to the <a href="https://opendata.cityofnewyork.us/overview/#termsofuse">NYC Open Data terms of use</a>. The map's code is free to use under the MIT license, on <a href="https://github.com/RamonEppens/nyc-crime-map">GitHub</a>.</li>
+        <li>This is an independent project. It is not affiliated with or endorsed by the City of New York or the NYPD.</li>
+      </ul>
+    </section>
+
+    <section id="contact">
+      <h2>Contact</h2>
+      <p>To report an error or ask a question, open an issue on <a href="https://github.com/RamonEppens/nyc-crime-map/issues">GitHub</a>.</p>
+    </section>
+
+    <footer class="about-foot">
+      <p>Last updated October 22, 2026.</p>
+      <p><a href="./">Back to the map</a> · <a href="about.html">About this data</a></p>
+    </footer>
+  </main>
+</body>
+</html>
