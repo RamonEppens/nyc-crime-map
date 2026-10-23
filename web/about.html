@@ -31,6 +31,8 @@
         <li><a href="#withheld">Withheld locations</a></li>
         <li><a href="#rates">Rates and their caveats</a></li>
         <li><a href="#colors">How colors are set</a></li>
+        <li><a href="#why">Why I made this map</a></li>
+        <li><a href="#how">How it was built</a></li>
       </ul>
     </nav>
 
@@ -76,6 +78,30 @@
       <p>Hexagons are split at the 20th, 40th, 60th, 80th and 95th percentiles of the hexagons with complaints anywhere in the city, rounded to friendly numbers, so the deepest shade is the top 5% and the busiest areas can still be told apart. Column height shows the count too. Precincts are split into six classes with about the same number of precincts each. The classes are computed for the whole city, so panning or zooming never recolors a place; they change only when you change the dates or offenses. The key always shows the ranges, the unit and the period.</p>
       <p>When you zoom in, the key switches to the dots: their color is the offense group with the most complaints at that location, and their size grows with the number of complaints there.</p>
       <p>The density color is a single plum hue, chosen because it reads as neither water, parks nor alarm. The four offense groups have their own colors, used only for the dots and the offense list. Highlighter yellow marks the block or neighborhood you are pointing at in a chart.</p>
+    </section>
+
+    <section id="why">
+      <h2>Why I made this map</h2>
+      <p>I built this as a personal project, but it started two years ago. For a university project, I made a scrollytelling piece about New York's 311 complaints, the things New Yorkers call the city about. It was the first time I looked at a whole city through what its people report. What stayed with me was how plainly it showed inequality: counted per resident, some parts of the city reported far more problems than others. A few simple numbers made the city's social divides hard to ignore. I was left wanting more than a story you scroll through once.</p>
+      <p>This year I started working on a newspaper's data team in Buenos Aires, where I've been building maps of my own city's complaints, block by block, with a search by address. That work changed how I think about data. On a map you start from your own street, and the numbers stop being abstract. What better and more reliable way to understand data than a map?</p>
+      <p>I'm finishing my degree in data science, and this is the project I wanted to close it with: going back to New York, now with ten years of NYPD complaints and everything I've learned since. I want people to understand where they live, how they live and how it changes through time.</p>
+      <p>Ramón Eppens</p>
+    </section>
+
+    <section id="how">
+      <h2>How it was built</h2>
+      <p>Everything comes from public data. From NYC Open Data:</p>
+      <ul>
+        <li><a href="https://data.cityofnewyork.us/d/qgea-i56i">NYPD Complaint Data Historic</a>, the complaints themselves (snapshot of April 28, 2026)</li>
+        <li><a href="https://data.cityofnewyork.us/d/9nt8-h7nd">2020 Neighborhood Tabulation Areas</a>, the neighborhoods</li>
+        <li><a href="https://data.cityofnewyork.us/d/y76i-bdw7">Police Precincts</a></li>
+        <li><a href="https://data.cityofnewyork.us/d/inkn-q76z">NYC Street Centerline (CSCL)</a>, for streets, blocks and the address search</li>
+        <li><a href="https://data.cityofnewyork.us/d/wmsu-5muw">2020 Census Blocks</a> and <a href="https://data.cityofnewyork.us/d/63ge-mke6">2020 Census Tracts</a>, to count residents</li>
+      </ul>
+      <p>Resident counts come from the 2020 Census (U.S. Census Bureau API). To check the numbers, the map is compared with the NYPD's own CompStat figures for the seven major felonies: citywide totals are within 0.7% of CompStat in every year from 2016 to 2025, and 97% of precinct-years are within 2%.</p>
+      <p>A set of Python scripts downloads the data, cleans it, places each complaint in its neighborhood, precinct and street, and writes small files the map reads. The map runs entirely in your browser: <a href="https://maplibre.org">MapLibre</a> draws the streets, <a href="https://deck.gl">deck.gl</a> draws the data and <a href="https://duckdb.org">DuckDB</a> answers each filter on your own device, without a database server. Base map by <a href="https://carto.com/attributions">CARTO</a>, map data from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors. Type: Newsreader and Schibsted Grotesk.</p>
+      <p>I wrote the code with the help of Claude Code, an AI coding assistant. The decisions are mine: what to count, how to group offenses, how to compare places, what to leave out, and checking the results against NYPD's figures. Each one is written down, with the reason, in the project's decision log.</p>
+      <p>The code, the data notes and the decision log are open on <a href="https://github.com/RamonEppens/nyc-crime-map">GitHub</a> under the MIT license.</p>
     </section>
 
     <footer class="about-foot">
