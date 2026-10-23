@@ -5,7 +5,7 @@ import * as db from './db.js';
 import {
   createMap, setTheme, setHexagons, setUniverse, hexStats, setSelection, showBounds,
   setView, setPrecinctShapes, setPrecincts, precinctUnit, precinctName, setTint, setBoroughShapes, setBoroughs, setUnit2d,
-  setPin, flyToPoint, fitTo, setHighlight, followTo, followEnd, setMask, setTilt, addMapButton,
+  setPin, flyToPoint, fitTo, setHighlight, followTo, followEnd, setMask, setTilt, addMapButton, FEW_RESIDENTS,
 } from './map.js';
 import { hexAt, hexCenter, hexPolygon, featureAt, meters, circlePolygon, bounds, degLat, degLon } from './geo.js';
 import { setupSearch, loadStreets, streetById } from './search.js';
@@ -291,6 +291,7 @@ function renderCategories() {
 }
 function setupCategoryActions() {
   const changed = () => { renderCategories(); loadMonthly(); refresh(); };
+  window.__setCats = (codes) => { state.cats = new Set(codes); changed(); };   // tests
   $('.cat-grid').addEventListener('click', (e) => {
     const t = e.target.closest('button');
     if (!t) return;
@@ -429,7 +430,8 @@ function changeOf(total, base) {
   const note = `${year}: ${fmt(base.n)}${base.scale === 1 ? '' : ', vs yearly average'}`;
   const words = Math.abs(pct) < 1 ? `about the same as ${base.words.replace(/^from /, '')}`
     : `${pct > 0 ? 'up' : 'down'} ${Math.abs(shown)}% ${base.words}`;
-  return { value, note, words };
+  // A jump over +300% is almost always NYPD moving where it places complaints (decision #82).
+  return { value, note, words: pct > 300 ? `${words} (a jump this large usually means NYPD changed how it records locations here)` : words };
 }
 /** The panel's lead sentence and three tiles: Total · Compared with the city · Change since 2019. */
 function showSummary({ total, totalNote = '', ratio = { value: 'n/a' }, label = 'Compared with the city', base, notes = [], changeOverride = null, leadParts = null }) {
@@ -442,13 +444,14 @@ function showSummary({ total, totalNote = '', ratio = { value: 'n/a' }, label = 
   }
   $('.lead').textContent = `${parts.join(', ')}.`;
   if (total === 0) {
-    $('.lead').innerHTML = `No complaints of this type here in ${periodLabel()}. <button type="button" class="chip reset-filters">Reset filters</button>`;
+    $('.lead').innerHTML = `No complaints${state.cats.size === meta.categories.length ? '' : ' of the selected types'} here in ${periodLabel()}. <button type="button" class="chip reset-filters">Reset filters</button>`;
     $('.lead .reset-filters').onclick = resetFilters;
   }
   // A ledger, not KPI cards (decision #77): short label, the number, a comparison line; "?" in the corner.
-  const short = (l) => ({ 'Compared with the city': 'vs city', 'Compared with typical': 'vs typical' }[l] ?? l.replace(/^Change since /, 'vs '));
+  const short = (l) => ({ 'Compared with the city': 'vs city', 'Compared with typical': 'vs typical' }[l]
+    ?? (/^Change since \d{4}$/.test(l) ? l.replace(/^Change since /, 'vs ') : /^Change since /.test(l) ? 'vs earlier' : l));
   const tile = (l, v, note = '', help = '') => `<div class="figure"><div class="label">${short(l)}</div>${helpMark(help, l)}
-    <div class="value${/^[−+]?[\d.,]+[×%]?$|<span/.test(v) ? (String(v).replace(/<[^>]+>/g, '').length > 6 ? ' long' : '') : ' text'}">${v}</div>${note ? `<div class="fnote">${note}</div>` : ''}</div>`;
+    <div class="value${/^[−+]?[\d.,]+[×%]?$|<span/.test(v) ? (String(v).replace(/<[^>]+>/g, '').length > 5 ? ' long' : '') : ' text'}">${v}</div>${note ? `<div class="fnote">${note}</div>` : ''}</div>`;
   closeHelp();
   $('.figures').innerHTML = tile('Total', tnum(fmt(total)), totalNote || 'complaints')
     + tile(ratio.label ?? label, ratio.value, ratio.note ?? '', ratio.help ?? '')
@@ -515,9 +518,10 @@ const filterLabel = () => {
 };
 
 function renderHeader(title, context) {
-  // Hyphenated names never break at the hyphen ("Bedford-/Stuyvesant"): each stays on one line.
+  // Hyphenated names don't break at the hyphen ("Bedford-/Stuyvesant") unless they are too long
+  // for one line ("Downtown Brooklyn-DUMBO-Boerum Hill"), which would push the buttons off the panel.
   $('.detail h2').innerHTML = String(title).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/(\S+-\S+)/g, '<span class="nobr">$1</span>');
+    .replace(/(\S+-\S+)/g, (w) => (w.length <= 18 ? `<span class="nobr">${w}</span>` : w.replace(/-/g, '-<wbr>')));
   $('.detail .sub').textContent = filterLabel();
   const ctx = $('.detail .context');
   ctx.innerHTML = context ?? '';
@@ -786,7 +790,7 @@ function shareBelow(P, x) {
   return P[0] >= x ? 0 : Math.min(99, k);
 }
 const perYear = (days) => days / 365.25;
-const fmtIndex = (x) => `${x < 10 ? x.toFixed(1) : Math.round(x)}×`;
+const fmtIndex = (x) => (Number.isFinite(x) ? `${x < 10 ? x.toFixed(1) : Math.round(x)}×` : '–');   // – when nothing to compare (no offenses picked)
 const blockLabel = (b) => (b >= 1_000_000
   ? `${Math.floor((b - 1_000_000) / 1000)}-00 to ${Math.floor((b - 1_000_000) / 1000)}-99`
   : `${b}–${b + 99}`);
@@ -813,8 +817,8 @@ async function renderSelection(ticket) {
     const total = sum(byCat);
     const counts = new Map(all.map((r) => [r.nta, r.n]));
     const cityRate = sum(all) / meta.ntas.reduce((t, x) => t + x.population, 0);
-    const residential = info.type === 'residential' && info.population >= 1000;
-    const rates = meta.ntas.filter((x) => x.type === 'residential' && x.population >= 1000)
+    const residential = info.type === 'residential' && info.population >= FEW_RESIDENTS;
+    const rates = meta.ntas.filter((x) => x.type === 'residential' && x.population >= FEW_RESIDENTS)
       .map((x) => (counts.get(x.code) ?? 0) / x.population);
     const rate = total / Math.max(1, info.population);
     renderHeader(info.name, `Neighborhood in <button class="link" data-boro="${info.boro}">${meta.boroughs[info.boro]}</button>, ${info.population ? `${fmt(info.population)} residents` : 'no resident population'}`);
@@ -823,7 +827,7 @@ async function renderSelection(ticket) {
     showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 },
       ratio: residential ? { value: fmtIndex(rate / cityRate), note: `${ordinal(percentileOf(rates, rate))} percentile, neighborhoods`,
         words: `${fmtIndex(rate / cityRate)} the city rate per resident`,
-        help: `Complaints per resident ÷ the city rate. ${per100k(rate)} per 100,000 residents a year (city: ${per100k(cityRate)}). Percentile: share of residential neighborhoods (1,000+ residents) with a lower rate.` }
+        help: `Complaints per resident ÷ the city rate. ${per100k(rate)} per 100,000 residents a year (city: ${per100k(cityRate)}). Percentile: share of residential neighborhoods with 2,000 or more residents with a lower rate.` }
         : { value: 'n/a', note: 'few or no residents' } });
     renderBars(byCat);
     $('.detail .note').textContent = `${RESIDENT_NOTE} Neighborhood counts include only complaints with a map location; rape and sex crimes are counted by precinct.`;
@@ -879,15 +883,15 @@ async function renderSelection(ticket) {
     const population = pcts.reduce((t, p) => t + (cmp.precinct_population[p] ?? 0), 0);
     const cityRate = sum(all) / meta.totals.population_2020;
     const rate = total / Math.max(1, population);
-    const rates = [...units].filter(([k]) => popOf(k) >= 1000).map(([k, n]) => n / popOf(k));
-    const ranked = population >= 1000;
+    const rates = [...units].filter(([k]) => popOf(k) >= FEW_RESIDENTS).map(([k, n]) => n / popOf(k));
+    const ranked = population >= FEW_RESIDENTS;
     const years = perYear(daysOf(monthsOf(state.period)));
     renderHeader(precinctName(sel.props), `NYPD precinct${sel.props.merged ? 's' : ''} in ${meta.boroughs[boro[0]?.boro] ?? 'New York City'}, ${fmt(population)} residents`
       + (sel.props.merged ? '<br>Shown together: the 116th was created from the 105th and 113th in December 2024.' : ''));
     showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 },
       ratio: ranked ? { value: fmtIndex(rate / cityRate), note: `${ordinal(percentileOf(rates, rate))} percentile, ${units.size} precincts`,
         words: `${fmtIndex(rate / cityRate)} the city rate per resident`,
-        help: `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents a year (city: ${fmt((cityRate * 100000) / years)}). Percentile: share of precincts with a lower rate per resident.` }
+        help: `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents a year (city: ${fmt((cityRate * 100000) / years)}). Percentile: share of precincts with 2,000 or more residents that have a lower rate.` }
         : { value: 'n/a', note: 'few or no residents' } });
     renderBars(byCat);
     $('.detail .note').textContent = `${RESIDENT_NOTE} Precinct counts use NYPD's precinct field and include every complaint, also rape and sex crimes. Population: 2020 Census blocks inside the precinct.`;
@@ -958,9 +962,9 @@ async function renderSpot(sel, ticket, base, sum) {
   const isNew = start >= 12 && (history[0]?.before ?? 0) < 12;
   const firstYear = history[0]?.first != null ? 2016 + Math.floor(history[0].first / 12) : null;
   const topPrem = prem[0] && total ? { label: premiseLabel(prem[0].prem).toLowerCase(), share: Math.round((100 * prem[0].n) / total) } : null;
-  const premWords = topPrem && topPrem.share >= 50 && !/^(street|not recorded)$/.test(topPrem.label) ? `${topPrem.share}% recorded at a ${topPrem.label}${/store|transit|station|office|bank|hospital|commercial/i.test(topPrem.label) ? ' (often filed by the business or station, not on the street)' : ''}` : null;
+  const premWords = topPrem && topPrem.share >= 50 && !/^(street|not recorded)$/.test(topPrem.label) ? `${topPrem.share}% recorded at ${/^[aeiou]/.test(topPrem.label) ? 'an' : 'a'} ${topPrem.label}${/store|transit|station|office|bank|hospital|commercial/i.test(topPrem.label) ? ' (often filed by the business or station, not on the street)' : ''}` : null;
   showSummary({ total, totalNote: 'at this point', base: isNew ? null : base && { ...base, n: prev[0]?.n ?? 0 }, label: 'Compared with typical',
-    changeOverride: isNew ? { label: 'Earlier comparison', value: firstYear ? `New since ${firstYear}` : 'New point', note: 'no earlier history at this point', words: '' } : null,
+    changeOverride: isNew ? { label: 'Earlier', value: firstYear ? `New since ${firstYear}` : 'New point', note: 'no earlier history at this point', words: '' } : null,
     leadParts: isNew ? [premWords ?? `a point first used in ${firstYear}`] : null,
     ratio: med > 0 && total > 0 ? { value: fmtIndex(total / med), note: `${ordinal(Math.min(99, Math.floor((100 * cityRow.below) / Math.max(1, cityRow.locs))))} percentile, locations`,
       words: `${fmtIndex(total / med)} the typical location`,
@@ -1355,6 +1359,7 @@ async function refresh() {
   renderSummary({ total, precinctOnly: lt[1] ?? 0, none: lt[2] ?? 0, noPrecinct, noBorough });
   renderNotice(state.view === 'precincts' ? { drawable: total, total } : { drawable: lt[0] ?? 0, total });
   document.body.dataset.ready = 'true';
+  window.__refreshed = ticket;        // tests: the last refresh that finished
 }
 
 // When the selection has nothing to draw, say why instead of showing an empty map.
@@ -1757,6 +1762,7 @@ async function main() {
   if (params.has('db')) {                        // test mode only: hooks for headless tests
     window.__nycmap = map;
     window.__hexStats = hexStats;
+    window.__pending = () => pending;
     window.__setSpan = (a, b) => { customOpen = false; setSpan(a, b); };
     window.__select = { city: selectCity, precinct: (pct) => (precinctGeo ? selectPrecinct(precinctUnit(pct)) : selectPrecinctNumber(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, point: selectPoint, spot: selectSpot, street: selectStreet, clear: clearSelection };
   }

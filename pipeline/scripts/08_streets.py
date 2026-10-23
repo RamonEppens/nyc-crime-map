@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import json
 import re
 from collections import defaultdict
@@ -59,6 +60,7 @@ CORNER_M = 3.0             # a complaint this close to an intersection counts fo
 GROUND_LEVEL_TOL = 0.75    # node matching tolerance in meters (endpoints of meeting segments coincide)
 GRID_STEP_M = 100.0        # comparison grid for addresses / corners
 RADIUS_M = 200.0
+PARALLEL_M = 70.0          # parallel roadbeds of one street closer than this are measured once
 SHORT_STREET_M = 300.0     # streets shorter than this are left out of the street percentile
 HYPHEN_BASE = 1_000_000    # Queens 37-12 -> 1_037_012 (never collides with a plain number)
 YEARS = list(range(2016, 2026))
@@ -275,6 +277,46 @@ def house_number(seg, pt) -> int:
     return int(round(sum(vals) / len(vals))) if vals else -1
 
 
+def roadbed_weights(segs) -> np.ndarray:
+    """Length weight per segment, so a divided street is measured once (decision #81).
+
+    The centerline draws each roadbed of a divided street as its own line (upper Broadway, Park
+    Avenue, Queens Boulevard...), and has no field that says so. A segment with k parallel segments
+    of the same street beside it (direction within 20 degrees, midpoints within PARALLEL_M, offset
+    sideways by more than 8 m, no shared endpoint) counts 1 / (1 + k) of its length, k at most 2.
+    """
+    w = np.ones(len(segs))
+    by_street = defaultdict(list)
+    for i, s in enumerate(segs):
+        if s["street"] >= 0:
+            by_street[s["street"]].append(i)
+    for idx in by_street.values():
+        if len(idx) < 2:
+            continue
+        info = []
+        for i in idx:
+            c = np.asarray(segs[i]["geom"].coords)
+            d = c[-1] - c[0]
+            info.append((c.mean(axis=0), math.atan2(d[1], d[0]) % math.pi,
+                         {tuple(np.round(c[0], 1)), tuple(np.round(c[-1], 1))}))
+        mids = np.array([m for m, _, _ in info])
+        tree = cKDTree(mids)
+        for a, near in enumerate(tree.query_ball_point(mids, r=PARALLEL_M)):
+            m, ang, ends = info[a]
+            v = np.array([math.cos(ang), math.sin(ang)])
+            k = 0
+            for b in near:
+                if b == a or info[b][2] & ends:
+                    continue
+                da = abs(ang - info[b][1])
+                if min(da, math.pi - da) < math.radians(20):
+                    off = mids[b] - m
+                    if abs(v[0] * off[1] - v[1] * off[0]) > 8:
+                        k += 1
+            w[idx[a]] = 1 / (1 + min(k, 2))
+    return w
+
+
 def percentiles(values: np.ndarray) -> list:
     return [round(float(v), 3) for v in np.percentile(values, np.arange(101))]
 
@@ -300,11 +342,12 @@ def main() -> None:
     mid_ll = [LineString(s["coords"]).interpolate(0.5, normalized=True) for _, s in mids]
     hit_seg, hit_nta = nta_tree.query(np.array(mid_ll, dtype=object), predicate="within")
     seg_nta = dict(zip(hit_seg.tolist(), hit_nta.tolist()))
-    for k, (_, s) in enumerate(mids):
+    weight = roadbed_weights(segs)
+    for k, (i, s) in enumerate(mids):
         st = streets[s["street"]]
-        st["length"] += s["geom"].length
+        st["length"] += s["geom"].length * weight[i]
         if k in seg_nta:
-            st["nta_len"][nta_codes[seg_nta[k]]] += s["geom"].length
+            st["nta_len"][nta_codes[seg_nta[k]]] += s["geom"].length * weight[i]
 
     print("Corners")
     nodes, node_xy = corners_and_nodes(segs, loc)
