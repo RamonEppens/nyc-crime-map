@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "fetch:duckdb-ext": "node scripts/fetch-duckdb-ext.mjs",
     "test:smoke": "node tests/smoke.mjs",
-    "build:start-cache": "node scripts/build-start-cache.mjs"
+    "build:start-cache": "node scripts/build-start-cache.mjs",
+    "upload:data": "node scripts/upload-r2.mjs"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",
@@ -25,6 +26,7 @@
     "vite": "8.3.3"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1156.0",
     "axe-core": "^4.10.2",
     "playwright": "1.56.1"
   }
