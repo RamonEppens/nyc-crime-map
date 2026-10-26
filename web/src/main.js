@@ -1759,10 +1759,11 @@ async function main() {
   const panelWidth = () => document.documentElement.style.setProperty('--panel-w', `${$('.detail').hidden ? 0 : $('.detail').offsetWidth}px`);
   new ResizeObserver(panelWidth).observe($('.detail'));
   new MutationObserver(panelWidth).observe($('.detail'), { attributes: true, attributeFilter: ['hidden'] });
-  if (db.testEngine) {                           // test mode only: hooks for headless tests
+  if (db.testEngine || params.has('hooks')) {     // test mode (or ?hooks with the real engine): hooks for headless tests
     window.__nycmap = map;
     window.__hexStats = hexStats;
     window.__pending = () => pending;
+    window.__query = query;
     window.__setSpan = (a, b) => { customOpen = false; setSpan(a, b); };
     window.__select = { city: selectCity, precinct: (pct) => (precinctGeo ? selectPrecinct(precinctUnit(pct)) : selectPrecinctNumber(pct)), borough: selectBorough, nta: selectNta, hex: selectHex, point: selectPoint, spot: selectSpot, street: selectStreet, clear: clearSelection };
   }

@@ -18,9 +18,17 @@ const dataVersion = fetch(`${DATA_URL}version.json`, { cache: 'no-store' })
   .then((r) => (r.ok ? r.json() : {})).then((v) => (v.data ? `?v=${v.data}` : '')).catch(() => '');
 const dataUrl = async (name) => `${DATA_URL}${name}${await dataVersion}`;
 
-// Small tables are copied into memory once; large ones stay remote and are read in pieces.
+// How each table is read (decision #89). Every HTTP request from the engine costs a round trip to
+// the data host (150–300 ms from far away), and the engine makes them one at a time, so reading a
+// file in many small pieces is what made panels slow. Instead:
+//  - IN_MEMORY: downloaded whole at startup and copied into tables (the map needs them at once);
+//  - BUFFERED: downloaded whole in the background after the first map, then queried in memory
+//    (one request each, ~30 MB together);
+//  - RANGED: incidents (60 MB) stays remote, read in pieces; its queries touch a few row groups.
 const IN_MEMORY = ['hex', 'agg_precinct', 'agg_nta'];
-const REMOTE = ['incidents', 'points', 'street_segments', 'street_corners', 'street_blocks', 'agg_time', 'loc_street'];
+const BUFFERED = ['loc_street', 'street_corners', 'street_segments', 'street_blocks', 'points', 'agg_time'];
+const RANGED = ['incidents'];
+const REMOTE = [...BUFFERED, ...RANGED];
 
 let run;
 let engineReady = false;
@@ -48,12 +56,14 @@ const record = params.has('record') ? (globalThis.__startAnswers = {}) : null;
 // Queries wait for the engine, so the page can draw the map while DuckDB is still loading.
 let resolveReady;
 const ready = new Promise((r) => { resolveReady = r; });
-// Remote tables are opened (their Parquet footers read) only once something needs them, and not
-// before the first map is drawn: startup only needs the three in-memory tables.
+// Remote tables are opened only once something needs them, and not before the first map is drawn:
+// startup only needs the three in-memory tables. Each table has its own promise, so a query waits
+// only for the tables it uses.
 let openRemote = () => Promise.resolve();
 let remoteOpened = null;
 export const warmRemote = () => (remoteOpened ??= openRemote());
-const REMOTE_RE = new RegExp(`\\b(${['incidents', 'points', 'street_segments', 'street_corners', 'street_blocks', 'agg_time', 'loc_street'].join('|')})\\b`);
+const tableReady = {};
+const REMOTE_RE = new RegExp(`\\b(${REMOTE.join('|')})\\b`, 'g');
 
 /** Test mode (`?db=http://localhost:8765`): queries go to a local SQL server instead of the
  *  in-browser engine. Only a server on this computer is accepted, so a crafted link can never send
@@ -98,18 +108,48 @@ export async function initDb() {
   // server supports ranges (GitHub Pages, R2 and the dev server all do).
   await db.open({ filesystem: { reliableHeadRequests: true, allowFullHTTPReads: false, forceFullHTTPReads: false } });
   const conn = await db.connect();
+  // Keep each Parquet file's footer after the first read, instead of fetching it again per query.
+  for (const setting of ['parquet_metadata_cache', 'enable_http_metadata_cache']) {
+    await conn.query(`SET ${setting} = true`).catch(() => null);
+  }
 
   // Parquet support is an extension; it is self-hosted (see scripts/fetch-duckdb-ext.mjs).
   await conn.query(`SET custom_extension_repository = '${extRepo}'`);
   await conn.query('INSTALL parquet; LOAD parquet;');
 
-  for (const name of [...IN_MEMORY, ...REMOTE]) {
-    await db.registerFileURL(`${name}.parquet`, await dataUrl(`${name}.parquet`),
-      duckdb.DuckDBDataProtocol.HTTP, false);
+  // A whole file in one request (the browser caches it under its versioned URL).
+  const download = async (name) => {
+    const res = await fetch(await dataUrl(`${name}.parquet`));
+    if (!res.ok) throw new Error(`${res.status} loading ${name}.parquet`);
+    await db.registerFileBuffer(`${name}.parquet`, new Uint8Array(await res.arrayBuffer()));
+  };
+  await Promise.all(IN_MEMORY.map(download));
+  for (const name of IN_MEMORY) await conn.query(`CREATE TABLE ${name} AS SELECT * FROM read_parquet('${name}.parquet')`);
+  for (const name of RANGED) {
+    await db.registerFileURL(`${name}.parquet`, await dataUrl(`${name}.parquet`), duckdb.DuckDBDataProtocol.HTTP, false);
   }
-  await Promise.all(IN_MEMORY.map((name) => conn.query(`CREATE TABLE ${name} AS SELECT * FROM read_parquet('${name}.parquet')`)));
   openRemote = async () => {
-    for (const name of REMOTE) await conn.query(`CREATE VIEW ${name} AS SELECT * FROM read_parquet('${name}.parquet')`);
+    for (const name of RANGED) {
+      tableReady[name] = conn.query(`CREATE VIEW ${name} AS SELECT * FROM read_parquet('${name}.parquet')`);
+    }
+    // Smallest first, two downloads at a time: the street search and single places are ready soonest.
+    const settle = {};
+    for (const name of BUFFERED) {
+      tableReady[name] = new Promise((resolve, reject) => { settle[name] = { resolve, reject }; });
+      tableReady[name].catch(() => {});            // a failure surfaces in the query that needs it
+    }
+    const queue = [...BUFFERED];
+    const lane = async () => {
+      while (queue.length) {
+        const name = queue.shift();
+        try {
+          await download(name);
+          await conn.query(`CREATE VIEW ${name} AS SELECT * FROM read_parquet('${name}.parquet')`);
+          settle[name].resolve();
+        } catch (e) { settle[name].reject(e); }
+      }
+    };
+    await Promise.all([lane(), lane()]);
   };
 
   run = async (sql) => {
@@ -127,11 +167,25 @@ export async function initDb() {
   resolveReady();
 }
 
+/** Waits until a remote table can be queried (openRemote creates its promise synchronously at
+ *  first, except in test mode, where every table is ready at once). */
+async function waitFor(table) {
+  while (!tableReady[table]) {
+    if (testEngine) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await tableReady[table];
+}
+
 /** Run SQL and get an array of plain objects. */
 export async function query(sql) {
   if (!engineReady && startCache?.has(sql)) { usedStartCache = true; return startCache.get(sql).map((r) => ({ ...r })); }
   await ready;
-  if (REMOTE_RE.test(sql)) await warmRemote();
+  const tables = [...new Set([...sql.matchAll(REMOTE_RE)].map((m) => m[1]))];
+  if (tables.length) {
+    warmRemote();
+    await Promise.all(tables.map((t) => waitFor(t)));
+  }
   return run(sql);
 }
 
