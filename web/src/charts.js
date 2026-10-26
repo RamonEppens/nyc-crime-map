@@ -88,13 +88,25 @@ function columnPath(x, y, w, h) {
 /** Shortens `part` (a text or tspan inside `text`) with an ellipsis until `text` fits in `max` px;
  *  the full words stay in a <title> for the tooltip and screen readers. */
 function fitText(text, part, max, full) {
-  if (!(text.getComputedTextLength?.() > max)) return;
-  let s = full;
-  while (s.length > 4 && text.getComputedTextLength() > max) {
-    s = s.slice(0, -1);
-    part.textContent = `${s.trimEnd()}…`;
-  }
-  text.append(el('title', {}, full));
+  const fit = () => {
+    part.textContent = full;
+    text.querySelector('title')?.remove();
+    if (!(text.getComputedTextLength?.() > max)) return;
+    let s = full;
+    while (s.length > 4 && text.getComputedTextLength() > max) {
+      s = s.slice(0, -1);
+      part.textContent = `${s.trimEnd()}…`;
+    }
+    text.append(el('title', {}, full));
+  };
+  afterFonts(fit);
+}
+
+/** Runs `fn` now and again once the web fonts have loaded: a measurement taken with the fallback
+ *  font is too short, and the label would overflow when the real font arrives. */
+function afterFonts(fn) {
+  fn();
+  if (document.fonts?.status === 'loading') document.fonts.ready.then(fn);
 }
 
 /** X-axis labels never touch: the first starts at the plot edge when it would reach the y-axis
@@ -293,7 +305,7 @@ export function dumbbells(host, { rows, color, beforeLabel, nowLabel }) {
   const { max: top } = niceTicks(max, 3);
   const x = (v) => m.left + (width - m.left - m.right) * (v / top);
   const key = svg.appendChild(el('text', { x: m.left, y: 11, class: 'tick' }, `○ ${beforeLabel}   ● ${nowLabel}`));
-  if (m.left + key.getComputedTextLength() > width) key.setAttribute('x', 0);   // long period names: use the label column too
+  afterFonts(() => key.setAttribute('x', m.left + key.getComputedTextLength() > width ? 0 : m.left));   // long period names: use the label column too
   rows.forEach((r, i) => {
     const y = m.top + rowH * i + rowH / 2;
     svg.append(el('line', { x1: m.left, x2: width - m.right, y1: y, y2: y, class: 'grid' }));

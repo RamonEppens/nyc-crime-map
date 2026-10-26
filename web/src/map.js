@@ -660,7 +660,10 @@ function render() {
   // The selection's name, set on the map in the headline serif, with a thin paper halo (ink on the
   // light map, paper text with an ink halo on the dark one).
   const around = state.selectionStyle === 'circle' || state.selectionStyle === 'outline' || state.selectionStyle === 'ring';
-  const label = state.selectionLabel ? haloText({
+  // A borough picked in the Boroughs view already has its name written on it: don't write it twice.
+  const named = state.view === 'precincts' && state.unit2d === 'borough'
+    && boroughs.units.some((u) => u.props.name === state.selectionLabel?.text);
+  const label = state.selectionLabel && !named ? haloText({
     id: 'selection-label', data: [state.selectionLabel], mix: 1, pale: () => theme === 'dark',
     triggers: `${theme}|${state.selectionLabel.text}|${state.selectionStyle}`, text: (d) => d.text, serif: true, size: 16,
     dy: around ? -12 : 0, baseline: around ? 'bottom' : 'center',
@@ -675,7 +678,11 @@ function render() {
     parameters: { depthCompare: 'always' },
     updateTriggers: { getFillColor: theme },
   });
-  overlay.setProps({ layers: [columns, points, ...precinctLayers(), veil, casing, outline, ...label, highlightEdge, highlight].filter(Boolean) });
+  // Area names and rates go above the selection's outline, so the outline never crosses them.
+  const areas = precinctLayers();
+  const isText = (l) => /label|^borough-(name|value)/i.test(l.id);
+  overlay.setProps({ layers: [columns, points, ...areas.filter((l) => !isText(l)), veil, casing, outline,
+    ...areas.filter(isText), ...label, highlightEdge, highlight].filter(Boolean) });
 }
 
 function precinctLayers() {

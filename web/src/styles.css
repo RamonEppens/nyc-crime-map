@@ -322,7 +322,8 @@ select:hover { border-color: var(--ink); }
 .pk-group, .pk-size { display: inline-flex; align-items: center; gap: 4px; }
 .pk-group i { width: 9px; height: 9px; border-radius: 50%; }
 .pk-size circle { fill: var(--muted); }
-.pk-note { margin-top: 6px; color: var(--muted); }
+.pk-note { margin-top: 6px; color: var(--muted); font-variant-numeric: normal; }   /* tabular figures widen commas and periods */
+.pk-note span { white-space: normal; padding: 0; text-align: left; }
 .legend-few i { width: 16px; height: 10px; background: repeating-linear-gradient(135deg, var(--muted) 0 1.5px, transparent 1.5px 4px), var(--sheet-2); }
 .legend-explain {
   position: absolute; left: -1px; bottom: calc(100% + 8px); width: 280px; padding: 10px 12px; display: grid; gap: 8px;

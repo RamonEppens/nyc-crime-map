@@ -338,13 +338,13 @@ function renderLegend(spec = lastLegend) {
   if (spec.points) {                               // zoomed in: dots, sized by count, colored by group
     const what = selectionWords();
     $('#legend-title').textContent = `Complaint locations, ${[what, periodLabel()].filter(Boolean).join(', ')}`;
-    $('#legend-hint').textContent = 'Each dot is a point where NYPD placed complaints, rounded to mid-block or the nearest intersection; it is never one address. Its size grows with the number of complaints there, and its color is the offense group with the most complaints there. Rape and sex crimes are never placed on the map.';
+    $('#legend-hint').textContent = 'To protect privacy, the NYPD moves every complaint to the middle of its block or to the nearest corner. That is why the dots line up along streets and gather at intersections: each one is a stretch of street, never one address. The size of a dot grows with the number of complaints there, and its color is the offense group with the most complaints there. Rape and sex crimes are never placed on the map.';
     const groups = Object.entries(GROUP_LABELS).map(([g, l]) => `<span class="pk-group"><i style="background:${GROUP_COLORS[g]}"></i>${{ person: 'Persons', property: 'Property', enforcement: 'Enforcement', other: 'Other' }[g] ?? l}</span>`).join('');
     const sizes = [1, 10, 50].map((n) => { const r = spec.radius(n); return `<span class="pk-size"><svg width="${2 * r + 2}" height="20" aria-hidden="true"><circle cx="${r + 1}" cy="10" r="${r}"/></svg>${n}</span>`; }).join('');
     $('.legend-ramp').innerHTML = '';
     $('.legend-labels').innerHTML = `<div class="pk-row"><span class="pk-k">Color: most frequent group</span>${groups}</div>
       <div class="pk-row"><span class="pk-k">Size: complaints at this location</span>${sizes}</div>
-      <p class="pk-note">Locations are rounded to mid-block or intersection.</p>`;
+      <p class="pk-note"><span>NYPD moves each complaint to mid-block or the nearest corner, so dots line up along streets.</span></p>`;
     $('.legend-few').hidden = true;
     return;
   }
