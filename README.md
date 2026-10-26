@@ -33,7 +33,7 @@ Ramón Eppens
 - **Complaints, not crimes.** A complaint is a report taken by the NYPD, not an arrest or a
   conviction. The map never calls a place safe or dangerous.
 - **Locations are rounded** by the NYPD to the middle of the block or the nearest intersection.
-- **Withheld locations.** Rape and other sex crimes are placed at the precinct station house by the
+- **Withheld locations.** Rape and sex crimes are placed at the precinct station house by the
   NYPD; they are counted in precinct, borough and city totals but never drawn on the map.
 - **Rates per resident** use the 2020 Census; places with fewer than 2,000 residents are not rated.
 - **No suspect or victim demographics** anywhere.

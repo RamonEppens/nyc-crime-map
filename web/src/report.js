@@ -68,7 +68,7 @@ export async function buildReport(ctx) {
   const hidden = [];
   // Comparisons with the baseline: a period longer than a year is compared as its yearly average.
   const sc = ctx.prevScale ?? 1;
-  const nowLabel = sc === 1 ? ctx.periodLabel : `${ctx.periodLabel}, a year`;
+  const nowLabel = sc === 1 ? ctx.periodLabel : `${ctx.periodLabel}, yearly average`;
   const scaled = (v) => Math.round(v * sc);
   const tasks = [];
 
@@ -344,7 +344,7 @@ export async function buildReport(ctx) {
       return {
         id: 'premise', title: 'What kind of place',
         answer: `Reported as ${top[0].label.toLowerCase()} (${share(top[0].n)})${top[1] ? `, then ${top[1].label.toLowerCase()} (${share(top[1].n)})` : ''}.`,
-        note: 'The premise type the officer recorded for each complaint. A store, a station or an office here often means complaints filed by the business, not on the street.',
+        note: 'The premise type the officer recorded for each complaint. A store, a station or an office here often means the business filed the complaints itself.',
         draw: (host) => rankBars(host, { color: ctx.color, rows: top.map((r) => ({ name: r.label, detail: share(r.n), value: r.n,
           tip: `<strong>${r.label}</strong><br>${complaints(r.n)}, ${share(r.n)}` })) }),
       };
@@ -360,7 +360,7 @@ export async function buildReport(ctx) {
       return {
         id: 'days', title: 'Busiest days',
         answer: `${fmtDay(top[0].d)}: ${complaints(top[0].n)} (${Math.round((100 * top[0].n) / n)}% of this period). The five busiest days hold ${Math.round(topShare)}%.`
-          + (batch ? ' Many complaints on one day usually means a batch filed together, not a spike in incidents.' : ' Complaints are spread out over time.'),
+          + (batch ? ' Many complaints on one day usually means a batch filed together.' : ' Complaints are spread out over time.'),
         note: 'By report date; shares are of all complaints at this point in the period.',
         draw: (host) => rankBars(host, { color: ctx.color, rows: top.map((r) => ({ name: fmtDay(r.d), value: r.n,
           tip: `<strong>${fmtDay(r.d)}</strong><br>${complaints(r.n)}` })) }),

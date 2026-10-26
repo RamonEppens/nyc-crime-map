@@ -269,7 +269,7 @@ function renderCategories() {
     </div>`;
     if (single) continue;
     html += `<div class="cat-types" id="types-${g}" style="--g:${GROUP_COLORS[g]}"${open ? '' : ' hidden'}>
-      ${g === 'enforcement' ? '<span class="group-note">Mostly police activity, not reports by residents</span>' : ''}`;
+      ${g === 'enforcement' ? '<span class="group-note">Mostly found by police on patrol</span>' : ''}`;
     // Most complaints first (for the chosen dates); groups keep their place so they don't jump.
     const byCount = [...cats].sort((a, b) => (catCounts.get(b.code) ?? 0) - (catCounts.get(a.code) ?? 0));
     for (const c of byCount) {
@@ -354,8 +354,8 @@ function renderLegend(spec = lastLegend) {
   $('#legend-title').textContent = rate ? `Complaints per 1,000 residents a year, ${tail}`
     : `Complaints per hexagon, ${tail}`;
   $('#legend-hint').textContent = rate
-    ? 'Precincts and boroughs are colored by complaints per 1,000 residents (2020 Census) per year, in six classes with about the same number of precincts each, rounded to friendly numbers. Boroughs use the same classes. Precincts with fewer than 2,000 residents are hatched, not rated. Rape and sex crimes are included.'
-    : 'Each hexagon is 180 m across a side, about 8 blocks. Colors split the hexagons with complaints anywhere in the city at the 20th, 40th, 60th, 80th and 95th percentiles, rounded to friendly numbers, so the darkest shade is the top 5%. The classes change only when you change the dates or offenses, so panning never recolors the map. Column height shows the count too.';
+    ? 'Precincts and boroughs are colored by complaints per 1,000 residents a year (2020 Census), in six classes with about the same number of precincts in each; the limits are rounded. Boroughs use the same classes. Precincts with fewer than 2,000 residents are hatched and get no rate. Rape and sex crimes are included.'
+    : 'Each hexagon is 180 m on a side, about eight blocks. The colors split all the hexagons with complaints in the city at the 20th, 40th, 60th, 80th and 95th percentiles (rounded), so the darkest shade is the top 5%. They change only when you change the dates or offenses, so panning never recolors the map. Column height shows the count too.';
   if (!breaks.length || breaks.some((b) => !Number.isFinite(b))) {     // nothing to classify (yet: before the first counts)
     $('.legend-ramp').innerHTML = '';
     $('.legend-labels').innerHTML = '<span>No complaints to show</span>';
@@ -827,7 +827,7 @@ async function renderSelection(ticket) {
     showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 },
       ratio: residential ? { value: fmtIndex(rate / cityRate), note: `${ordinal(percentileOf(rates, rate))} percentile, neighborhoods`,
         words: `${fmtIndex(rate / cityRate)} the city rate per resident`,
-        help: `Complaints per resident ÷ the city rate. ${per100k(rate)} per 100,000 residents a year (city: ${per100k(cityRate)}). Percentile: share of residential neighborhoods with 2,000 or more residents with a lower rate.` }
+        help: `${per100k(rate)} complaints a year for every 100,000 residents here, against ${per100k(cityRate)} in the whole city. The percentile is the share of neighborhoods with 2,000 or more residents that have a lower rate.` }
         : { value: 'n/a', note: 'few or no residents' } });
     renderBars(byCat);
     $('.detail .note').textContent = `${RESIDENT_NOTE} Neighborhood counts include only complaints with a map location; rape and sex crimes are counted by precinct.`;
@@ -852,7 +852,7 @@ async function renderSelection(ticket) {
     renderHeader(meta.boroughs[sel.code], `Borough of New York City, ${fmt(population)} residents`);
     showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 },
       ratio: cityRate ? { value: fmtIndex(rate / cityRate), note: `${ordinal(rank)} of 5 boroughs`, words: `${fmtIndex(rate / cityRate)} the city rate per resident`,
-        help: `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents a year (city: ${fmt((cityRate * 100000) / years)}). Rank among the five boroughs by complaints per resident (1st = highest).` }
+        help: `${fmt((rate * 100000) / years)} complaints a year for every 100,000 residents here, against ${fmt((cityRate * 100000) / years)} in the whole city. 1st is the highest rate of the five boroughs.` }
         : { value: 'n/a' } });
     renderBars(byCat);
     $('.detail .note').textContent = `${RESIDENT_NOTE} Borough counts include every complaint, also rape and sex crimes, which NYPD places at the precinct station house.`;
@@ -891,7 +891,7 @@ async function renderSelection(ticket) {
     showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 },
       ratio: ranked ? { value: fmtIndex(rate / cityRate), note: `${ordinal(percentileOf(rates, rate))} percentile, ${units.size} precincts`,
         words: `${fmtIndex(rate / cityRate)} the city rate per resident`,
-        help: `Complaints per resident ÷ the city rate. ${fmt((rate * 100000) / years)} per 100,000 residents a year (city: ${fmt((cityRate * 100000) / years)}). Percentile: share of precincts with 2,000 or more residents that have a lower rate.` }
+        help: `${fmt((rate * 100000) / years)} complaints a year for every 100,000 residents here, against ${fmt((cityRate * 100000) / years)} in the whole city. The percentile is the share of precincts with 2,000 or more residents that have a lower rate.` }
         : { value: 'n/a', note: 'few or no residents' } });
     renderBars(byCat);
     $('.detail .note').textContent = `${RESIDENT_NOTE} Precinct counts use NYPD's precinct field and include every complaint, also rape and sex crimes. Population: 2020 Census blocks inside the precinct.`;
@@ -914,11 +914,11 @@ async function renderSelection(ticket) {
     const median = values.length ? values[Math.floor(values.length / 2)] : 0;
     const nta = featureAt(ntaGeo, hexCenter(q, r));
     renderHeader('Hexagon', nta
-      ? `Hexagon of about 8 blocks in <button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>`
-      : 'Hexagon of about 8 blocks, 180 m per side');
+      ? `Hexagon of about eight blocks in <button class="link" data-nta="${nta.properties.code}">${nta.properties.name}</button>`
+      : 'Hexagon of about eight blocks, 180 m per side');
     showSummary({ total, base: base && { ...base, n: prev[0]?.n ?? 0 }, label: 'Compared with typical',
       ratio: median ? { value: `${(total / median).toFixed(1)}×`, note: `${ordinal(percentileOf(values, total))} percentile, hexagons`,
-        words: `${(total / median).toFixed(1)}× the median hexagon`, help: 'Complaints in this hexagon ÷ the median hexagon with complaints, same dates and offenses.' }
+        words: `${(total / median).toFixed(1)}× the median hexagon`, help: `A typical hexagon (the median of those with any complaints, same dates and offenses) has ${fmt(median)}. The percentile is the share of hexagons with fewer.` }
         : { value: 'n/a' } });
     renderBars(byCat);
     $('.detail .note').textContent = 'NYPD places each complaint at the nearest intersection or mid-block, so a hexagon counts the complaints snapped inside it. Rape and sex crimes are never placed on the map.';
@@ -962,16 +962,16 @@ async function renderSpot(sel, ticket, base, sum) {
   const isNew = start >= 12 && (history[0]?.before ?? 0) < 12;
   const firstYear = history[0]?.first != null ? 2016 + Math.floor(history[0].first / 12) : null;
   const topPrem = prem[0] && total ? { label: premiseLabel(prem[0].prem).toLowerCase(), share: Math.round((100 * prem[0].n) / total) } : null;
-  const premWords = topPrem && topPrem.share >= 50 && !/^(street|not recorded)$/.test(topPrem.label) ? `${topPrem.share}% recorded at ${/^[aeiou]/.test(topPrem.label) ? 'an' : 'a'} ${topPrem.label}${/store|transit|station|office|bank|hospital|commercial/i.test(topPrem.label) ? ' (often filed by the business or station, not on the street)' : ''}` : null;
+  const premWords = topPrem && topPrem.share >= 50 && !/^(street|not recorded)$/.test(topPrem.label) ? `${topPrem.share}% recorded at ${/^[aeiou]/.test(topPrem.label) ? 'an' : 'a'} ${topPrem.label}${/store|transit|station|office|bank|hospital|commercial/i.test(topPrem.label) ? ' (often reported by the business or station itself)' : ''}` : null;
   showSummary({ total, totalNote: 'at this point', base: isNew ? null : base && { ...base, n: prev[0]?.n ?? 0 }, label: 'Compared with typical',
     changeOverride: isNew ? { label: 'Earlier', value: firstYear ? `New since ${firstYear}` : 'New point', note: 'no earlier history at this point', words: '' } : null,
     leadParts: isNew ? [premWords ?? `a point first used in ${firstYear}`] : null,
     ratio: med > 0 && total > 0 ? { value: fmtIndex(total / med), note: `${ordinal(Math.min(99, Math.floor((100 * cityRow.below) / Math.max(1, cityRow.locs))))} percentile, locations`,
       words: `${fmtIndex(total / med)} the typical location`,
-      help: `Complaints at this point ÷ the median of the ${fmt(cityRow.locs)} locations in the city with complaints, same dates and offenses (median: ${fmt(med)}). Percentile: share of those locations with fewer.` }
+      help: `A typical location has ${fmt(med)} (the median of the ${fmt(cityRow.locs)} locations in the city with complaints, same dates and offenses). The percentile is the share of those locations with fewer.` }
       : { value: 'n/a' } });
   renderBars(byCat);
-  $('.detail .note').textContent = 'NYPD rounds each complaint to the middle of the block or the nearest intersection, so this point holds every complaint placed on this stretch of street or corner, not at one address. Rape and sex crimes are never placed on the map.';
+  $('.detail .note').textContent = 'NYPD rounds each complaint to the middle of the block or the nearest intersection, so one point gathers every complaint on that stretch of street or corner. Rape and sex crimes are never placed on the map.';
 }
 
 /** Address or corner: complaints within 200 m, compared with 200 m circles every 100 m over
@@ -993,14 +993,14 @@ async function renderPoint(sel, ticket, base, top, sum) {
   const total = sum(byCat);
   const previous = compare ? sum(near(prevLoc)) : null;
   const fair = fairSeries();
-  let index = { value: '—', note: fair.why, help: 'Complaints within 200 m ÷ the median 200 m circle in NYC.' };
+  let index = { value: '—', note: fair.why, help: 'Compared with a typical 200 m circle in the city.' };
   if (!fair.why) {
     const P = cmp.point[fair.type][fair.series];
     const x = total / fair.years;
     const circles = fmt(cmp.grid_points);
     index = P[50] > 0
       ? { value: fmtIndex(x / P[50]), note: `${ordinal(shareBelow(P, x))} percentile, 200 m circles`, words: `${fmtIndex(x / P[50])} the typical 200 m circle in NYC`,
-        help: `Complaints within 200 m ÷ the median of ${circles} circles of 200 m centered every 100 m on land, same offense types and ${fair.series === 'avg' ? 'yearly average' : 'year'} (median: ${fmt(P[50])}). Percentile: share of those circles with fewer complaints.` }
+        help: `A typical 200 m circle in the city has ${fmt(P[50])} (the median of ${circles} circles centered every 100 m on land, same offense types and ${fair.series === 'avg' ? 'yearly average' : 'year'}). The percentile is the share of those circles with fewer.` }
       : { value: 'n/a', note: 'the typical circle has none' };
   }
   const nta = featureAt(ntaGeo, sel.lngLat);
@@ -1037,7 +1037,7 @@ async function renderStreet(sel, ticket, base, top, sum) {
   else pctlNote = `${ordinal(shareBelow(cmp.street[fair.type][fair.series], rate / fair.years))} percentile, NYC streets`;
   const index = cityRate > 0
     ? { value: fmtIndex(rate / cityRate), note: pctlNote || 'the street average per 100 m', words: `${fmtIndex(rate / cityRate)} the NYC street average per 100 m`,
-      help: `Complaints per 100 m of this street ÷ all complaints on NYC streets per 100 m of street (${rateText(cityRate)}). Percentile: share of NYC streets 300 m or longer with a lower rate.` }
+      help: `NYC streets average ${rateText(cityRate)} per 100 m. The percentile is the share of streets 300 m or longer with a lower rate.` }
     : { value: 'n/a' };
   const ntas = s.nNtas > 3 ? `${s.nNtas} neighborhoods` : s.ntas.map((c) => meta.ntas[c]?.name).filter(Boolean).join(', ');
   renderHeader(s.name, `Street in ${meta.boroughs[s.boro]}, ${fmtLength(s.length)} long${ntas ? `, through ${ntas}` : ''}`);
@@ -1369,8 +1369,8 @@ function renderNotice({ drawable, total }) {
   const withheld = [...state.cats].filter((c) => state.notMapped.has(c)).map((c) => meta.categories[c].label);
   if (total > 0 && withheld.length) {
     el.innerHTML = `<strong>${withheld.join(', ')}: not shown on the map</strong>
-      <p>NYPD does not publish where these offenses happened, to protect victims. Each one is placed at the
-      precinct station house, so we count them in the totals on the right but do not draw them.</p>`;
+      <p>To protect victims, NYPD places these complaints at the precinct station house instead of where
+      they happened. They are counted in the totals on the right, but never drawn.</p>`;
   } else if (total > 0) {
     el.innerHTML = '<strong>Nothing to draw for this selection</strong><p>These complaints have no location in the data. They are counted in the totals on the right.</p>';
   } else if (!state.cats.size) {                  // the cause is the filter, not the data
@@ -1645,7 +1645,7 @@ async function main() {
   initDb().catch((err) => {
     console.error('[nycmap] the data engine could not start:', err);
     clearStale();
-    $('#summary-sub').textContent = `The data engine could not start (${err.message}), so filters can't be applied. Reload the page to try again.`;
+    $('#summary-sub').textContent = 'Filters can\'t be applied right now. Reloading the page usually fixes it.';
   });
   progress(8);
   const boroughsP = loadJson('boroughs.geojson');             // the veil and borough outlines, first thing on the map
@@ -1779,5 +1779,5 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
-  $('#city-total').textContent = `Could not load the data: ${err.message}`;
+  $('#city-total').textContent = 'The map couldn\'t load its data. Check your connection and reload the page.';
 });

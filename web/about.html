@@ -21,7 +21,7 @@
   </header>
   <main class="about">
     <h1>About this data</h1>
-    <p class="dek">The map shows complaints reported to the New York City Police Department from 2016 to 2025, from the city's open data. This page explains what that means, and what it doesn't.</p>
+    <p class="dek">The map shows complaints reported to the New York City Police Department from 2016 to 2025, from the city's open data. This page explains what that means.</p>
 
     <nav aria-label="On this page">
       <ul>
@@ -39,7 +39,7 @@
     <section id="complaints">
       <h2>Complaints, not crimes</h2>
       <p>Each record is a complaint: a report of a felony, misdemeanor or violation that the NYPD took down. It is not an arrest, a charge or a conviction, and some complaints turn out not to be crimes at all. Many crimes are never reported, and reporting rates differ between offenses and between neighborhoods, so the map shows where complaints were made, not where crime happened or how safe a place is.</p>
-      <p>"Enforcement offenses" (drugs, weapons, traffic and impaired driving, public order) mostly record what police officers found while on patrol, not what residents reported. They rise and fall with where and how police work.</p>
+      <p>"Enforcement offenses" (drugs, weapons, traffic and impaired driving, public order) mostly record what police officers found on patrol. They rise and fall with where and how police work.</p>
       <p>The map uses 18 offense types of its own, built on the NYPD's offense codes, in four groups. It never shows the age, race or sex of suspects or victims.</p>
     </section>
 
@@ -57,7 +57,7 @@
 
     <section id="withheld">
       <h2>Withheld locations</h2>
-      <p>For rape, other sex crimes and sexual exploitation the NYPD does not publish where they happened, to protect victims; it places them at the precinct station house instead. The map counts these complaints in the city, borough and precinct totals but never draws them on hexagons or as points, because a station house is not where they happened. They are marked † in the offense list.</p>
+      <p>For rape and sex crimes (including sexual exploitation) the NYPD withholds where they happened, to protect victims, and places them at the precinct station house instead. The map counts these complaints in the city, borough and precinct totals but never draws them on hexagons or as points: every station house would show up as a false hot spot. They are marked † in the offense list.</p>
       <p>A small share of other complaints has no location at all. Those are counted in the totals and the one-sentence summary says how many.</p>
     </section>
 
@@ -75,7 +75,7 @@
     <section id="colors">
       <h2>How colors are set</h2>
       <p>On the light map, darker means more; on the dark map, brighter means more. Precincts and boroughs follow the same rule as the hexagons, so each map reads one way.</p>
-      <p>Hexagons are split at the 20th, 40th, 60th, 80th and 95th percentiles of the hexagons with complaints anywhere in the city, rounded to friendly numbers, so the deepest shade is the top 5% and the busiest areas can still be told apart. Column height shows the count too. Precincts are split into six classes with about the same number of precincts each. The classes are computed for the whole city, so panning or zooming never recolors a place; they change only when you change the dates or offenses. The key always shows the ranges, the unit and the period.</p>
+      <p>Hexagons are split at the 20th, 40th, 60th, 80th and 95th percentiles of the hexagons with complaints anywhere in the city, rounded, so the deepest shade is the top 5% and the busiest areas can still be told apart. Column height shows the count too. Precincts are split into six classes with about the same number of precincts each. The classes are computed for the whole city, so panning or zooming never recolors a place; they change only when you change the dates or offenses. The key always shows the ranges, the unit and the period.</p>
       <p>When you zoom in, the key switches to the dots: their color is the offense group with the most complaints at that location, and their size grows with the number of complaints there.</p>
       <p>The density color is a single plum hue, chosen because it reads as neither water, parks nor alarm. The four offense groups have their own colors, used only for the dots and the offense list. Highlighter yellow marks the block or neighborhood you are pointing at in a chart.</p>
     </section>
