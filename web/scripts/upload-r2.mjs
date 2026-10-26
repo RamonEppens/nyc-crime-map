@@ -34,9 +34,11 @@ const cacheOf = (name) => (/^(meta|start)\.json$/.test(name) ? 'public, max-age=
 
 const files = readdirSync(dataDir).filter((f) => TYPES[path.extname(f)] && statSync(path.join(dataDir, f)).isFile()).sort();
 let sent = 0, same = 0, bytes = 0;
+const sums = [];
 for (const name of files) {
   const body = readFileSync(path.join(dataDir, name));
   const md5 = createHash('md5').update(body).digest('hex');
+  sums.push(`${name}:${md5}`);
   const remote = await s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: name })).catch(() => null);
   if (remote?.ETag?.replace(/"/g, '') === md5) { same++; continue; }
   console.log(`${dry ? 'would upload' : 'uploading'} ${name} (${(body.length / 1e6).toFixed(1)} MB)`);
@@ -46,6 +48,16 @@ for (const name of files) {
   sent++; bytes += body.length;
 }
 console.log(`${sent} ${dry ? 'to upload' : 'uploaded'} (${(bytes / 1e6).toFixed(1)} MB), ${same} unchanged`);
+
+// version.json: one hash of every file's content. The map adds it to each data URL (?v=…), so a
+// browser never mixes cached pieces of an old file with a new one (decision #88). Never cached.
+const version = createHash('sha256').update(sums.join('\n')).digest('hex').slice(0, 12);
+const current = await fetch(`${PUBLIC_URL}/version.json`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+if (current.data !== version) {
+  console.log(`${dry ? 'would set' : 'setting'} data version ${version} (was ${current.data ?? 'none'})`);
+  if (!dry) await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: 'version.json', Body: JSON.stringify({ data: version }),
+    ContentType: 'application/json', CacheControl: 'no-store' }));
+} else console.log(`data version ${version} unchanged`);
 
 if (!dry) {
   // The browser's view: a Range read of a Parquet file, sent from the live site's origin.

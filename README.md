@@ -85,6 +85,7 @@ uv run scripts/07_web_data.py
 uv run scripts/08_download_streets.py  # network: street centerline, census blocks
 uv run scripts/08_streets.py
 uv run scripts/09_charts.py
+uv run scripts/10_web_compat.py        # rewrites the map's Parquet so the in-browser engine can read it
 uv run pytest
 
 cd ../web

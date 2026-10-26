@@ -11,6 +11,12 @@ import ehWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 
 const params = new URLSearchParams(location.search);
 export const DATA_URL = new URL(import.meta.env.VITE_DATA_URL || 'data/', document.baseURI).href;
+// Data version (version.json, written by `npm run upload:data`, never cached): added to every data
+// URL, so after an update the browser can't mix cached pieces of the old files with the new ones
+// (decision #88). Missing locally: plain URLs.
+const dataVersion = fetch(`${DATA_URL}version.json`, { cache: 'no-store' })
+  .then((r) => (r.ok ? r.json() : {})).then((v) => (v.data ? `?v=${v.data}` : '')).catch(() => '');
+const dataUrl = async (name) => `${DATA_URL}${name}${await dataVersion}`;
 
 // Small tables are copied into memory once; large ones stay remote and are read in pieces.
 const IN_MEMORY = ['hex', 'agg_precinct', 'agg_nta'];
@@ -26,7 +32,7 @@ export let usedStartCache = false;
 /** Load start.json if it matches this data (same meta.json); otherwise ignore it. */
 export async function loadStartCache(metaText) {
   try {
-    const c = await (await fetch(`${DATA_URL}start.json`)).json();
+    const c = await (await fetch(await dataUrl('start.json'))).json();
     if (c.meta !== hashText(metaText)) return;
     startCache = new Map(Object.entries(c.answers).map(([sql, { cols, rows }]) =>
       [sql, rows.map((r) => Object.fromEntries(cols.map((k, i) => [k, r[i]])))]));
@@ -98,7 +104,7 @@ export async function initDb() {
   await conn.query('INSTALL parquet; LOAD parquet;');
 
   for (const name of [...IN_MEMORY, ...REMOTE]) {
-    await db.registerFileURL(`${name}.parquet`, `${DATA_URL}${name}.parquet`,
+    await db.registerFileURL(`${name}.parquet`, await dataUrl(`${name}.parquet`),
       duckdb.DuckDBDataProtocol.HTTP, false);
   }
   await Promise.all(IN_MEMORY.map((name) => conn.query(`CREATE TABLE ${name} AS SELECT * FROM read_parquet('${name}.parquet')`)));
@@ -130,12 +136,12 @@ export async function query(sql) {
 }
 
 export async function loadJson(name) {
-  const res = await fetch(`${DATA_URL}${name}`);
+  const res = await fetch(await dataUrl(name));
   if (!res.ok) throw new Error(`${res.status} loading ${name}`);
   return res.json();
 }
 export async function loadText(name) {
-  const res = await fetch(`${DATA_URL}${name}`);
+  const res = await fetch(await dataUrl(name));
   if (!res.ok) throw new Error(`${res.status} loading ${name}`);
   return res.text();
 }
