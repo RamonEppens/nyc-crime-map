@@ -108,14 +108,16 @@ export async function initDb() {
   // server supports ranges (GitHub Pages, R2 and the dev server all do).
   await db.open({ filesystem: { reliableHeadRequests: true, allowFullHTTPReads: false, forceFullHTTPReads: false } });
   const conn = await db.connect();
-  // Keep each Parquet file's footer after the first read, instead of fetching it again per query.
-  for (const setting of ['parquet_metadata_cache', 'enable_http_metadata_cache']) {
-    await conn.query(`SET ${setting} = true`).catch(() => null);
-  }
 
   // Parquet support is an extension; it is self-hosted (see scripts/fetch-duckdb-ext.mjs).
   await conn.query(`SET custom_extension_repository = '${extRepo}'`);
   await conn.query('INSTALL parquet; LOAD parquet;');
+  // Keep each Parquet file's footer after the first read, instead of fetching it again per query.
+  // Only after LOAD: setting a Parquet option earlier makes DuckDB autoload the extension from
+  // extensions.duckdb.org instead of our copy, and that build broke reading on the live site (#89).
+  for (const setting of ['parquet_metadata_cache', 'enable_http_metadata_cache']) {
+    await conn.query(`SET ${setting} = true`).catch(() => null);
+  }
 
   // A whole file in one request (the browser caches it under its versioned URL).
   const download = async (name) => {

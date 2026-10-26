@@ -939,9 +939,18 @@ async function renderSpot(sel, ticket, base, sum) {
   ]);
   if (ticket !== pending) return;
   const total = sum(byCat);
-  const [cityRow] = await query(`SELECT median(n)::DOUBLE AS med, count(*)::INTEGER AS locs,
-      count(*) FILTER (WHERE n < ${total})::INTEGER AS below
-    FROM (SELECT sum(n) AS n FROM points WHERE ${where()} GROUP BY lat, lon)`);
+  // Complaints per location across the city, sorted, once per dates and offenses (the city-wide
+  // scan is the slow part of a location's panel; every location after the first is instant).
+  const key = `locsums:${where()}`;
+  if (!locSums.has(key)) {
+    locSums.set(key, query(`SELECT sum(n)::INTEGER AS n FROM points WHERE ${where()} GROUP BY lat, lon ORDER BY 1`)
+      .then((rows) => Int32Array.from(rows, (r) => r.n)));
+  }
+  const sorted = await locSums.get(key);
+  const lowerBound = (x) => { let lo = 0, hi = sorted.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < x) lo = mid + 1; else hi = mid; } return lo; };
+  const mid = sorted.length >> 1;
+  const cityRow = { med: sorted.length ? (sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2) : 0,
+    locs: sorted.length, below: lowerBound(total) };
   if (ticket !== pending) return;
   // Its name: the corner (two or more streets meet here) or the block of its street.
   const names = [...new Set(streets.map((r) => streetById(r.street)?.name).filter(Boolean))];
@@ -1066,6 +1075,7 @@ const toSeries = (rows) => {
   return out;
 };
 const cache = new Map();
+const locSums = new Map();
 const cachedQuery = (key, sql) => { if (!cache.has(key)) cache.set(key, query(sql).then(toSeries)); return cache.get(key); };
 const catList = (cats) => [...cats].join(',') || '-1';
 const yearsOf = (months) => [...new Set(months.map((m) => 2016 + Math.floor(m / 12)))];
