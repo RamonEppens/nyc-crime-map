@@ -13,6 +13,8 @@ data/
 # Private reference material (rules, prompt, logos) and files shared in chat
 _private/
 Claude outputs/
+_transfer/
+*.zip
 
 # Python
 .venv/

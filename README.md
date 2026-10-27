@@ -96,7 +96,11 @@ npm run dev                            # http://localhost:5173
 Tests (from `web/`, with `npm run dev` and `python tests/sql_server.py ../data/web 8765` running):
 `npm run test:smoke`, `node tests/a11y.mjs` (accessibility) and `node tests/sweep.mjs depth`
 (every kind of selection, period and offense filter, checked for wrong values, overflowing text and
-overlapping labels).
+overlapping labels). `npm run test:engine` checks the real in-browser engine end to end, locally or
+against any deployment (`npm run test:engine -- https://ramoneppens.github.io/nyc-crime-map/`).
+
+Publishing: `npm run upload:data` copies `data/web` to the Cloudflare R2 bucket the live map reads
+(keys in `pipeline/.env`, never committed); a push to `main` rebuilds the site on GitHub Pages.
 
 ## Credit
 Data: NYC Open Data / NYPD. Base map © [CARTO](https://carto.com/attributions), map data ©
