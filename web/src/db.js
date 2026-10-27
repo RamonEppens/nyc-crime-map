@@ -119,14 +119,30 @@ export async function initDb() {
     await conn.query(`SET ${setting} = true`).catch(() => null);
   }
 
-  // A whole file in one request (the browser caches it under its versioned URL).
-  const download = async (name) => {
-    const res = await fetch(await dataUrl(`${name}.parquet`));
+  // A whole file in one request (the browser caches it under its versioned URL). A browser can keep
+  // a broken copy in its cache (seen on Chrome after earlier visits read the same file in pieces):
+  // then the file is read once more, straight from the server, and the cache is replaced (#92).
+  const isParquet = (b) => b.length > 8 && [0, b.length - 4].every((i) => String.fromCharCode(...b.subarray(i, i + 4)) === 'PAR1');
+  const download = async (name, fresh = false) => {
+    const res = await fetch(await dataUrl(`${name}.parquet`), fresh ? { cache: 'reload' } : {});
     if (!res.ok) throw new Error(`${res.status} loading ${name}.parquet`);
-    await db.registerFileBuffer(`${name}.parquet`, new Uint8Array(await res.arrayBuffer()));
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (!isParquet(bytes) && !fresh) return download(name, true);
+    // A second copy gets its own name, so nothing DuckDB remembers about the first one is reused.
+    const file = fresh ? `${name}.fresh.parquet` : `${name}.parquet`;
+    await db.registerFileBuffer(file, bytes);
+    return file;
   };
-  await Promise.all(IN_MEMORY.map(download));
-  for (const name of IN_MEMORY) await conn.query(`CREATE TABLE ${name} AS SELECT * FROM read_parquet('${name}.parquet')`);
+  /** Download, then `use` reads it; if the cached copy can't be read, once more from the server. */
+  const load = async (name, use) => {
+    const file = await download(name);
+    try { await use(file); } catch (e) {
+      console.warn(`[nycmap] ${name}.parquet could not be read (${e.message.split('\n')[0]}); downloading it again`);
+      await use(await download(name, true));
+    }
+  };
+  await Promise.all(IN_MEMORY.map((name) => load(name, (file) =>
+    conn.query(`CREATE OR REPLACE TABLE ${name} AS SELECT * FROM read_parquet('${file}')`))));
   for (const name of RANGED) {
     await db.registerFileURL(`${name}.parquet`, await dataUrl(`${name}.parquet`), duckdb.DuckDBDataProtocol.HTTP, false);
   }
@@ -145,8 +161,11 @@ export async function initDb() {
       while (queue.length) {
         const name = queue.shift();
         try {
-          await download(name);
-          await conn.query(`CREATE VIEW ${name} AS SELECT * FROM read_parquet('${name}.parquet')`);
+          // The footer is read once: a damaged copy usually fails here, before any query needs it.
+          await load(name, async (file) => {
+            await conn.query(`SELECT count(*) FROM parquet_metadata('${file}')`);
+            await conn.query(`CREATE OR REPLACE VIEW ${name} AS SELECT * FROM read_parquet('${file}')`);
+          });
           settle[name].resolve();
         } catch (e) { settle[name].reject(e); }
       }
