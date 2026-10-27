@@ -20,7 +20,7 @@ report vs occurrence dates, category changes, gaps vs CompStat).
 - **Show the uncertainty.** Incidents without coordinates count in totals and are shown as
   "N without location". Stacked/snapped coordinates are explained, not hidden.
 - **Clean-room code.** Do not copy code from other projects; methodology ideas are fine.
-- **Accessibility:** WCAG 2.1 AA (contrast, keyboard, screen-reader labels, colorblind-safe palettes).
+- **Accessibility:** WCAG 2.1 AA plus 2.2 target size (contrast, keyboard, screen-reader labels, colorblind-safe palettes).
 - **Ramón decides.** Explain trade-offs and propose; don't silently make product or
   methodology decisions. Log decisions in `docs/DECISIONS.md`.
 
@@ -44,6 +44,7 @@ uv run scripts/07_web_data.py        # files the map loads -> data/web/
 uv run scripts/08_download_streets.py # network: CSCL centerline, 2020 census blocks + population
 uv run scripts/08_streets.py         # streets, corners, complaints per street, comparisons -> data/web/
 uv run scripts/09_charts.py          # day x hour per place for the charts -> data/web/agg_time.parquet
+uv run scripts/10_web_compat.py      # rewrites the Parquet files so DuckDB-WASM can read them (last)
 uv run pytest                        # tests
 
 cd web
@@ -54,19 +55,20 @@ python tests/sql_server.py & npm run test:smoke   # headless test with the real 
 ```
 
 ## Design rules
-- Brand green #42A872 (logo) is for the interface only: logo, selection, active states. Never for data.
-- Text in brand green on light surfaces uses #2A7D53 (contrast). Check every new color pair for WCAG AA.
-- Data colors: single-hue blue hexagon ramps per theme, quantile breaks over hexagons in view (`src/colors.js`);
-  points colored by the 4 offense groups.
+- Brand green #42A872 is for the logo only (decision #64); ink is the interface color. Never green for data,
+  parks included. Check every new color pair for WCAG AA.
+- Data colors: single-hue plum ramps per theme (`src/colors.js`), classes computed once per filter over every
+  hexagon in the city (decisions #68, #69); points colored by the 4 offense groups, sized by count.
 - Hex grid: `pipeline/scripts/hexgrid.py` (180 m pointy-top axial). The map reads the grid from `meta.json`;
   never hard-code grid constants in the web app. ColumnLayer radius = side, angle 90, coverage 1.
-- Basemaps: CARTO dark-matter / positron.
+- Basemaps: CARTO dark-matter / positron, recolored in `src/basemap.js` (streets, blocks, parks; decision #93).
 - Fonts (decision #64): Newsreader (serif: masthead, place names, section and chart titles) and Schibsted Grotesk (everything else), both self-hosted (@fontsource). No other families. No glows, no floating cards, no brand green outside the logo: ink is the interface color, highlighter yellow (#FFCD28) only for hover-to-locate.
 - No icon libraries, emojis, gradients, glows, drop-shadow cards, bento grids or em dashes in copy.
   Separation by hairlines; radius 3 px for marks, 10 px for inputs and rows, 16 px for the floating blocks.
-- Layout (same as Ramón's BA map): map full width; every control on the left (brand with the total,
-  search, Date range, Offense types, legend); 3D/Precincts and Night/Light pills bottom left; the
-  details panel floats on the right only while something is selected (the total opens the city).
+- Layout (decision #71): map full width; a left sheet with the masthead, the total, search, dates and offense
+  types; Hot spots / Precincts / Boroughs and Tilt top right; legend bottom left of the map; zoom and theme
+  bottom right; the details panel on the right only while something is selected (the total opens the city).
+  On phones, a bottom sheet (decision #73).
   Time logic lives in `src/period.js`.
 - Street names: one normalization, `pipeline/scripts/streetnames.py` = `web/src/streetnames.js`;
   any change goes in both and in `config/street_name_cases.json` (tested on both sides).

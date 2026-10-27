@@ -79,7 +79,7 @@ function score(typed, words) {
   return { exact, extra: words.length - typed.length, len: words.join(' ').length };
 }
 
-/** Best streets for typed text, ranked like the BA map: current name before alias, more exact
+/** Best streets for typed text, ranked: current name before alias, more exact
  *  word matches, fewer extra words, shorter name. */
 export function matchStreets(text, boro, limit) {
   if (!index) return [];
