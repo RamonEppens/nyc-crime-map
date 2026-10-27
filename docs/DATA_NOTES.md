@@ -77,9 +77,9 @@ Rules are implemented in `pipeline/scripts/03_clean.py`; decisions are logged in
   rates there.
 
 ## Validation vs CompStat (`06_validate.py`, `docs/validation/`)
-- Seven major felonies, 2016–2025. Citywide our totals are within +0.1% to +0.7% of NYPD's published
-  figures every year (each offense within ±2%); murders match exactly in 8 of 10 years.
-- Precinct-years: 96% within ±2%, 99% within ±5%.
+- Seven major felonies, 2016–2025. Citywide our totals are within 1% of NYPD's published
+  figures every year (−0.1% to +0.73%; each offense within ±2%); murders match exactly in 8 of 10 years.
+- Precinct-years (769 compared): 97% within ±2%, all within ±5%.
 - Small positive gaps in older years are expected: CompStat freezes each year in January, the open
   dataset reflects later corrections.
 - Found an error in NYPD's published precinct table: the 116th Precinct rows for 2016–2023 repeat

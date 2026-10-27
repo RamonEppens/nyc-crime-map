@@ -42,7 +42,7 @@ The full explanation is on the map's [About this data](https://ramoneppens.githu
 
 ## Checked against the NYPD
 The data is compared with the NYPD's CompStat figures for the seven major felonies. Citywide totals
-are within 0.7% of CompStat in every year from 2016 to 2025, and 97% of precinct-years are within 2%.
+are within 1% of CompStat in every year from 2016 to 2025, and 97% of precinct-years are within 2%.
 Details: [`docs/validation/VALIDATION.md`](docs/validation/VALIDATION.md).
 
 ## Data
