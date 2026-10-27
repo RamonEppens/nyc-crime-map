@@ -735,8 +735,8 @@ function selectCity() {
 let opener = null;
 let focusPanel = false;
 function openedBy(el, keyboard = true) { opener = el; focusPanel = keyboard; }
-function clearSelection() {
-  const back = opener;
+/** Nothing selected: the panel closes at once (it doesn't wait for the refresh). */
+function dropSelection() {
   opener = null;
   state.selected = null;
   setPanelView('details');
@@ -744,6 +744,11 @@ function clearSelection() {
   $('.search-clear').hidden = true;
   setSelection(null);
   setPin(null);
+  showPanel(false);
+}
+function clearSelection() {
+  const back = opener;
+  dropSelection();
   refresh();
   if (back?.isConnected && back.offsetParent !== null) { back.dataset.quiet = '1'; back.focus(); }
 }
@@ -1307,18 +1312,31 @@ function resetFilters() {
   refresh();
 }
 
+function showPanel(open) {
+  const panel = $('.detail');
+  if (panel.hidden === !open) return;
+  panel.hidden = !open;
+  document.body.dataset.selected = String(open);
+  if (isPhone()) setSnap(open ? 'half' : 'peek');          // details open at half height
+}
+
 // ---------- refresh everything for the current filters
 let pending = 0;
+// The map's own numbers (hexagons, precincts, boroughs, totals) depend only on the filters. Picking
+// or closing a place keeps them: no new queries, no repaint, no dimming (decision #91).
+let mapData = { key: '', rows: null };
 async function refresh() {
   const ticket = ++pending;
-  if (document.body.dataset.ready) {
+  const base = baselineOf(state.period);
+  const key = [where(), base?.months.join(',') ?? '', !!precinctGeo, !!boroughGeo, precinctMerged()].join('|');
+  const fresh = key !== mapData.key;
+  if (fresh && document.body.dataset.ready) {
     markStale();
     $('#summary-filter').textContent = `in ${filterLabel()}.`;     // the words change at once, the number follows
+    // First visit: until the engine has downloaded, a new filter can't be answered yet; say so.
+    if (!db.engineIsReady()) $('#summary-sub').textContent = 'Loading the full data to apply this…';
   }
-  // First visit: until the engine has downloaded, a new filter can't be answered yet; say so.
-  if (!db.engineIsReady() && document.body.dataset.ready) $('#summary-sub').textContent = 'Loading the full data to apply this…';
-  const base = baselineOf(state.period);
-  const [hex, byLt, byCatAll, previous, byPct, byBoro] = await Promise.all([
+  const [hex, byLt, byCatAll, previous, byPct, byBoro] = fresh ? await Promise.all([
     query(`SELECT q, r, sum(n)::INTEGER AS n FROM hex WHERE ${where()} GROUP BY 1, 2`),
     query(`SELECT lt, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()} GROUP BY 1`),
     query(`SELECT cat, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${monthSql(monthsOf(state.period))} GROUP BY 1`),
@@ -1327,26 +1345,27 @@ async function refresh() {
       : Promise.resolve([{ n: 0 }]),
     precinctGeo ? query(`SELECT pct, sum(n)::INTEGER AS n FROM agg_precinct WHERE ${where()} GROUP BY 1`) : [],
     boroughGeo ? query(`SELECT boro, sum(n)::INTEGER AS n FROM agg_precinct WHERE boro BETWEEN 1 AND 5 AND ${where()} GROUP BY 1`) : [],
-  ]);
+  ]) : mapData.rows;
   if (ticket !== pending) return;      // a newer refresh started; drop this one
-  catCounts = new Map(byCatAll.map((r) => [r.cat, r.n]));
   const byCat = byCatAll.filter((r) => state.cats.has(r.cat));
-  renderCategories();
-  setTint(selectionGroup());                      // before both layers, so they change color together
-  const years = daysOf(monthsOf(state.period)) / 365.25;
-  if (precinctGeo) {
-    const pop = new Map(Object.entries(cmp?.precinct_population ?? {}).map(([k, v]) => [+k, v]));
-    setPrecincts(new Map(byPct.map((r) => [r.pct, r.n])), precinctMerged(), { pop, years });
-  }
-  if (boroughGeo) setBoroughs(new Map(byBoro.map((r) => [r.boro, r.n])), { pop: new Map([1, 2, 3, 4, 5].map((b) => [b, boroughPopulation(b)])), years });
-  renderLegend();                                   // the title names the dates and offenses
-
   const lt = Object.fromEntries(byLt.map((r) => [r.lt, r.n]));
   const total = (lt[0] ?? 0) + (lt[1] ?? 0) + (lt[2] ?? 0);
-  setHexagons(hex, periodLabel());
+  if (fresh) {
+    mapData = { key, rows: [hex, byLt, byCatAll, previous, byPct, byBoro] };
+    catCounts = new Map(byCatAll.map((r) => [r.cat, r.n]));
+    renderCategories();
+    setTint(selectionGroup());                      // before both layers, so they change color together
+    const years = daysOf(monthsOf(state.period)) / 365.25;
+    if (precinctGeo) {
+      const pop = new Map(Object.entries(cmp?.precinct_population ?? {}).map(([k, v]) => [+k, v]));
+      setPrecincts(new Map(byPct.map((r) => [r.pct, r.n])), precinctMerged(), { pop, years });
+    }
+    if (boroughGeo) setBoroughs(new Map(byBoro.map((r) => [r.boro, r.n])), { pop: new Map([1, 2, 3, 4, 5].map((b) => [b, boroughPopulation(b)])), years });
+    renderLegend();                                   // the title names the dates and offenses
+    setHexagons(hex, periodLabel());
+  }
   clearStale();
   markFirstPaint();
-  const panel = $('.detail');
   if (state.selected?.kind === 'city') {
     renderHeader('New York City', `All five boroughs, ${fmt(meta.totals.population_2020)} residents`);
     renderCity({ total, precinctOnly: lt[1] ?? 0, previous: previous[0]?.n ?? 0, base, days: daysOf(monthsOf(state.period)) });
@@ -1358,11 +1377,7 @@ async function refresh() {
   if (ticket !== pending) return;
   await renderCharts(ticket);
   if (ticket !== pending) return;
-  if (panel.hidden !== !state.selected) {
-    panel.hidden = !state.selected;
-    document.body.dataset.selected = String(!!state.selected);
-    if (isPhone()) setSnap(state.selected ? 'half' : 'peek');          // details open at half height
-  }
+  showPanel(!!state.selected);
   if (state.selected && focusPanel) { focusPanel = false; $('.place').focus({ preventScroll: true }); }
   updateBadge();
   const noPrecinct = byPct.find((r) => r.pct < 0)?.n ?? 0;
@@ -1409,6 +1424,7 @@ function setupAreas() {
   };
   const choose = async (area) => {
     if (area === areaOf()) return;
+    if (state.selected) dropSelection();             // a new view starts with nothing selected
     const view = area === 'hex' ? 'hex' : 'precincts';
     if (area !== 'hex' && state.unit2d !== area) {
       state.unit2d = area;
