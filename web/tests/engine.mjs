@@ -13,7 +13,8 @@ const url = process.argv[2] ?? 'http://localhost:5173/';
 const page0 = `${url}${url.includes('?') ? '&' : '?'}hooks&basemap=none&theme=light&nocache=${Date.now()}`;
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH,
-  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+  // Software WebGL only on Linux servers (no GPU); on Windows and macOS the machine's own GPU is used.
+  args: process.platform === 'linux' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] : [],
 });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });   // fresh cache
 const page = await context.newPage();
@@ -28,7 +29,14 @@ page.on('console', (m) => {
 const failures = [];
 const t0 = Date.now();
 await page.goto(page0);
-await page.waitForFunction(() => window.__engineReadyAt || /Filters can't/.test(document.querySelector('#summary-sub')?.textContent ?? ''));
+try {
+  await page.waitForFunction(() => window.__engineReadyAt || /Filters can't/.test(document.querySelector('#summary-sub')?.textContent ?? ''));
+} catch {
+  // Say where it got stuck instead of only "timeout".
+  const state = await page.evaluate(() => ({ dek: document.querySelector('#dek')?.innerText.slice(0, 120), hooks: typeof window.__select,
+    webgl: !!document.createElement('canvas').getContext('webgl2') })).catch(() => ({}));
+  console.log('stuck after 3 minutes:', JSON.stringify(state));
+}
 const ready = await page.evaluate(() => window.__engineReadyAt);
 console.log(ready ? `engine ready      ${ready} ms after navigation` : 'engine FAILED to start');
 if (!ready) failures.push('engine did not start');
