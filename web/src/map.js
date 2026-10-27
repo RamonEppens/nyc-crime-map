@@ -539,7 +539,7 @@ async function maybeLoadPoints() {
   state.pointsBox = wanted;
   const rows = await hooks.loadPoints(wanted);
   if (state.pointsBox !== wanted) return;         // a newer request replaced this one
-  state.points = rows;
+  state.points = rows.sort((x, y) => x.n - y.n);   // the busiest locations are drawn last, on top
   render();
 }
 
@@ -583,9 +583,9 @@ function render() {
     getRadius: (d) => pointRadius(d.n),            // area grows with the count
     getFillColor: (d) => rgb(GROUP_COLORS[categories[d.cat]?.group ?? 'other']),
     stroked: true,
-    getLineColor: tk('paper'),                       // 1 px casing in the land color
+    getLineColor: tk('paper'),                       // a paper casing: dots stay apart where they crowd
     lineWidthUnits: 'pixels',
-    getLineWidth: 1,
+    getLineWidth: (d) => (pointRadius(d.n) >= 5 ? 1.5 : 1),   // a firmer one on the busiest locations
     opacity: 0.9 * m * k,
     visible: m > 0 && k > 0,
     pickable: m >= 0.5 && k > 0.5,
