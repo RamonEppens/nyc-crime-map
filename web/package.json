@@ -10,7 +10,8 @@
     "fetch:duckdb-ext": "node scripts/fetch-duckdb-ext.mjs",
     "test:smoke": "node tests/smoke.mjs",
     "build:start-cache": "node scripts/build-start-cache.mjs",
-    "upload:data": "node scripts/upload-r2.mjs"
+    "upload:data": "node scripts/upload-r2.mjs",
+    "test:engine": "node tests/engine.mjs"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",

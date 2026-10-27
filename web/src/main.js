@@ -604,7 +604,8 @@ const premiseLabel = (code) => {
   const t = raw.toLowerCase().replace(/\s*-\s*/g, ', ').replace(/\//g, ' / ').replace(/\bnyc\b/g, 'NYC');
   return t[0].toUpperCase() + t.slice(1);
 };
-const spotSql = ([lon, lat]) => `abs(lat - ${lat}) < ${SPOT_EPS} AND abs(lon - ${lon}) < ${SPOT_EPS}`;
+// Written as ranges, not abs(), so the engine can skip the parts of the file far from the point.
+const spotSql = ([lon, lat]) => `lat BETWEEN ${lat - SPOT_EPS} AND ${lat + SPOT_EPS} AND lon BETWEEN ${lon - SPOT_EPS} AND ${lon + SPOT_EPS}`;
 function selectSpot(lngLat) {
   state.selected = { kind: 'spot', lngLat };
   if (isPhone()) flyToPoint(lngLat, 16, 900);
